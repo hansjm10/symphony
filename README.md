@@ -34,6 +34,19 @@ help with the setup:
 > Set up Symphony for my repository based on
 > https://github.com/openai/symphony/blob/main/elixir/README.md
 
+For this repo itself, after the Elixir app is built, you can also launch the checked-in workflow
+from the repository root with:
+
+```bash
+./run-symphony.sh
+```
+
+The launcher defaults to:
+- `SYMPHONY_DIR=./elixir`
+- `WORKFLOW_FILE=./elixir/WORKFLOW.md`
+- `ENV_FILE=./.env`
+- `SYMPHONY_PORT=8080`
+
 ---
 
 ## License
