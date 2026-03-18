@@ -1,45 +1,63 @@
 # Context-Pruner Token Savings Reports
 
-This repository now keeps two separate measurements under `elixir/docs/measurements/` because they answer different questions.
+The primary proof for the current constrained blank-state lookup design is the
+IDL-1149 measurement:
 
-## Workflow-Shape Measurement
+- latest report:
+  [`measurements/idl-1149-constrained-blank-state-context-pruner-2026-03-18.md`](measurements/idl-1149-constrained-blank-state-context-pruner-2026-03-18.md)
+- latest JSON:
+  [`measurements/idl-1149-constrained-blank-state-context-pruner-2026-03-18.json`](measurements/idl-1149-constrained-blank-state-context-pruner-2026-03-18.json)
+- measurement script:
+  [`../scripts/measure_context_pruner_token_savings.exs`](../scripts/measure_context_pruner_token_savings.exs)
 
-- Historical artifact: [`measurements/idl-1144-context-pruner-token-savings-2026-03-18.json`](measurements/idl-1144-context-pruner-token-savings-2026-03-18.json)
-- What it measures: end-to-end Codex thread totals for two repository-discovery workflows, one with ordinary shell reads and one with `context-pruner` guidance
-- What it does not measure: the remote pruner model's own reduction on the same submitted `{ code, query }` payload
+## What IDL-1149 Measures
 
-That IDL-1144 result is still useful for evaluating local context-gathering strategy, but it should not be read as a benchmark of the remote prune step itself.
+This benchmark is about main-thread context cleanliness, not just helper
+latency.
 
-## Remote-Pruner Measurement
+It compares:
 
-- Latest report: [`measurements/idl-1147-remote-pruner-token-savings-2026-03-18.md`](measurements/idl-1147-remote-pruner-token-savings-2026-03-18.md)
-- Latest JSON artifact: [`measurements/idl-1147-remote-pruner-token-savings-2026-03-18.json`](measurements/idl-1147-remote-pruner-token-savings-2026-03-18.json)
-- Measurement script: [`../scripts/measure_context_pruner_token_savings.exs`](../scripts/measure_context_pruner_token_savings.exs)
+- a broad inline main-thread read of `elixir/docs/context_pruner.md:94-179`
+- an out-of-band constrained blank-state Codex lookup over that same bounded
+  source, followed by a fresh main-thread run that receives only the lookup
+  result
 
-The IDL-1147 benchmark keeps the layers explicit:
+The latest captured result shows:
 
-- Layer 1: remote-pruner savings on the submitted payload itself
-- Layer 2: optional downstream Codex thread-total impact when the pruned payload is supplied to a full run
+- source window: `86` lines / `3111` bytes
+- returned lookup payload: `5` lines / `194` bytes
+- main-thread savings: `+724` total tokens (`5.06%`)
 
-For Layer 1, the supported `context-pruner lookup` flow is only a bounded input producer. The remote benchmark target is the live `PRUNER_URL` transformation applied to the same `{ code, query }` payload.
+The same run also proves the constraint boundary:
 
-## Current Takeaways
-
-- Already narrow file windows and already clustered grep results often come back unchanged.
-- Broader file windows that mix multiple contract sections do show meaningful remote reduction.
-- Grep outputs can also reduce meaningfully when the submitted payload still mixes env guidance, request-shape text, and score metadata, even within `elixir/docs/`.
-- The remote benchmark is opt-in and requires `PRUNER_URL`; it is not a default CI gate.
+- `lookup --command` is rejected under `CONTEXT_PRUNER_BACKEND=codex`
+- a scope-escape read against `SPEC.md` fails before the helper is launched
 
 ## Rerun
 
+If the environment does not already expose auth through passthrough env, point
+the measurement at an explicit Codex auth file:
+
 ```bash
-export PRUNER_URL=...
+export MEASURE_CONTEXT_PRUNER_LOOKUP_CODEX_AUTH_FILE="$HOME/.codex/auth.json"
 cd elixir
 mise exec -- mix run --no-start scripts/measure_context_pruner_token_savings.exs
-
-# Optional downstream Codex thread-total layer
-MEASURE_CONTEXT_PRUNER_INCLUDE_CODEX=1 \
-  mise exec -- mix run --no-start scripts/measure_context_pruner_token_savings.exs
 ```
 
-`JEEVES_PRUNER_URL` is accepted only as a compatibility alias when `PRUNER_URL` is unset. Each run writes dated JSON and Markdown artifacts under `elixir/docs/measurements/`.
+Optional overrides:
+
+- `MEASURE_CONTEXT_PRUNER_LOOKUP_MODEL`
+- `MEASURE_CONTEXT_PRUNER_LOOKUP_REASONING_EFFORT`
+- `MEASURE_CONTEXT_PRUNER_LOOKUP_CODEX_BIN`
+
+## Historical References
+
+Older reports still answer narrower questions and remain useful as background:
+
+- IDL-1144 workflow-shape comparison:
+  [`measurements/idl-1144-context-pruner-token-savings-2026-03-18.json`](measurements/idl-1144-context-pruner-token-savings-2026-03-18.json)
+- IDL-1147 remote `{ code, query }` payload benchmark:
+  [`measurements/idl-1147-remote-pruner-token-savings-2026-03-18.md`](measurements/idl-1147-remote-pruner-token-savings-2026-03-18.md)
+
+Those artifacts should not be read as proof of the new blank-state Codex scope
+contract. IDL-1149 is the current source of truth for that question.

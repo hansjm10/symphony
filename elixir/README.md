@@ -163,9 +163,20 @@ Fresh workspaces can use `context-pruner lookup` directly for remote-model-backe
 repository context discovery from bounded file windows, scoped search results,
 or exception-only shell capture.
 
-See [docs/context_pruner.md](docs/context_pruner.md) for the CLI syntax, env
-contract, verified prune payload, primary `pruned_code` response field,
-recommended `--focus` phrasing, and Jeeves reuse notes.
+The default backend is the remote `{ code, query }` pruner configured by
+`PRUNER_URL`. `CONTEXT_PRUNER_BACKEND=codex` switches lookup to a blank-state
+Codex worker with explicit model selection, explicit auth handoff
+(`CONTEXT_PRUNER_CODEX_AUTH_FILE` or auth env passthrough), and caller-defined
+read scope (`CONTEXT_PRUNER_ALLOWED_ROOTS`, `CONTEXT_PRUNER_ALLOWED_PATHS`,
+`CONTEXT_PRUNER_ALLOWED_GLOBS`).
+
+That Codex-backed lookup path is intentionally narrower than a normal task
+thread: it does not inherit parent session state, prompt state, repo cwd, or
+the full `HOME/.codex` tree.
+
+See [docs/context_pruner.md](docs/context_pruner.md) for the full backend
+contract, isolation rules, CLI syntax, verified remote payload shape, and
+measurement references.
 
 ## Web dashboard
 

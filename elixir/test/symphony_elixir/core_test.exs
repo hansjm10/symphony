@@ -972,7 +972,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "This is an unattended orchestration session."
     assert prompt =~ "Only stop early for a true blocker"
     assert prompt =~ "Do not include \"next steps for user\""
-    assert prompt =~ "`context-pruner` is the remote-model-backed context lookup CLI"
+    assert prompt =~ "`context-pruner` is the low-context lookup CLI for repository discovery"
     assert prompt =~ "Open `.codex/skills/context-pruner/SKILL.md` before discovery work"
     assert prompt =~ "must start with `context-pruner lookup`"
     assert prompt =~ "prefer `PRUNER_URL`"
