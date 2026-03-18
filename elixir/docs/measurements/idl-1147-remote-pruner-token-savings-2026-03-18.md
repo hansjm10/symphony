@@ -1,6 +1,6 @@
 # IDL-1147 Remote Pruner Token Savings Report
 
-Captured on 2026-03-18T14:07:28Z from workspace tree `1b57342`.
+Captured on 2026-03-18T14:20:46Z from workspace tree `9c08d99`.
 
 ## Scope
 
@@ -28,7 +28,7 @@ The script writes dated JSON and Markdown artifacts under `elixir/docs/measureme
 | --- | --- | ---: | ---: | ---: | --- |
 | `file_window_small_env_contract` | `file_window` | 100 | 100 | +0 | `none` |
 | `file_window_mixed_contract_section` | `file_window` | 571 | 248 | +323 | `meaningful` |
-| `search_result_remote_metadata_cluster` | `search_result` | 376 | 376 | +0 | `none` |
+| `search_result_remote_metadata_cluster` | `search_result` | 397 | 397 | +0 | `none` |
 | `search_result_docs_remote_contract_mix` | `search_result` | 370 | 252 | +118 | `meaningful` |
 
 ## Observations
@@ -114,8 +114,8 @@ Pruned output excerpt:
 - Producer command: `context-pruner grep --pattern 'origin_token_cnt|left_token_cnt|model_input_token_cnt|pruned_code|JEEVES_PRUNER_URL|PRUNER_URL' --path elixir/docs --context-lines 2 --max-matches 20`
 - Query: `Keep only the remote verification metadata and what it proved.`
 - Breakpoint note: This grep is already concentrated on the exact remote-verification terms, so it should reveal when the remote pruner has little left to remove.
-- Producer payload: 1165 bytes, 21 lines
-- Remote metadata: `origin_token_cnt=376`, `left_token_cnt=376`, `model_input_token_cnt=459`
+- Producer payload: 1268 bytes, 21 lines
+- Remote metadata: `origin_token_cnt=397`, `left_token_cnt=397`, `model_input_token_cnt=480`
 - Reduction: +0 tokens (0.0%), +0 bytes (0.0%)
 - Response keys: `error_msg`, `kept_frags`, `left_token_cnt`, `model_input_token_cnt`, `origin_token_cnt`, `pruned_code`, `score`, `token_scores`
 
@@ -168,9 +168,14 @@ elixir/docs/context_pruner.md-7
 
 ## Optional Downstream Codex Impact
 
-Set MEASURE_CONTEXT_PRUNER_INCLUDE_CODEX=1 to run the optional raw-vs-pruned Codex thread-total comparison.
+This layer compared raw versus pruned payloads by supplying the same context directly to Codex in a single-turn prompt.
 
-Single-turn prompt that supplies the raw or pruned payload directly and forbids repository inspection or tool use.
+| Case | Raw total | Pruned total | Savings |
+| --- | ---: | ---: | ---: |
+| `file_window_small_env_contract` | 13483 | 13457 | +26 |
+| `file_window_mixed_contract_section` | 14118 | 13637 | +481 |
+| `search_result_remote_metadata_cluster` | 13822 | 14197 | -375 |
+| `search_result_docs_remote_contract_mix` | 13852 | 13673 | +179 |
 
 ## Artifacts
 

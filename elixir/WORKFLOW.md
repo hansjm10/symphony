@@ -100,6 +100,12 @@ Instructions:
   - `context-pruner grep --pattern <regex> --path <path> --context-lines <n> --max-matches <n>` for bounded search.
   - `context-pruner bash --command "<command>"` only when the answer must come from shell output rather than directly from files.
 - Add `--focus` only after the file window, search path, and match counts are already narrow enough that pruning has a clear target.
+- Phrase `--focus` as the specific retention goal for the remote pruner:
+  - broader mixed file window -> `Keep exactly the statements that define ...`
+  - grep-style clustered output -> `Which lines are relevant to ...?`
+  - ultra-narrow fact lookup -> `Extract only the minimum text needed to answer ...`
+  - avoid negative-only phrasing like `Drop examples, framing, and unrelated lines.`
+  - avoid line-number-only phrasing like `Return only lines 49, 54, 67, and 68.`
 - Keep Symphony env-driven: prefer `PRUNER_URL`; use `JEEVES_PRUNER_URL` only as a compatibility alias when `PRUNER_URL` is unset. The current remote verification target referenced in `/work/jeeves/.env` is `http://192.168.1.15:8000/prune`, but do not hardcode it or assume it must be configured.
 - Fall back to bounded raw reads only when `context-pruner` is unavailable, cannot express the query, or you need exact raw bytes or interactive output. Use tight fallbacks such as `sed -n '120,160p' path`, `rg -n "pattern" path`, or a small shell command. Avoid full-file reads or unbounded repo sweeps unless no narrower option exists.
 

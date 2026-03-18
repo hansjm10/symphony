@@ -42,6 +42,31 @@ context-pruner bash --command "git status --short"
 Add `--focus "<question>"` to any command to request remote pruning before the
 content enters model context.
 
+## Focus-query guidance
+
+Treat `--focus` as the remote pruner model's task description.
+
+- For broader mixed file windows, prefer exact field-definition prompts such
+  as `Keep exactly the statements that define PRUNER_URL, the alias behavior,
+  request body, and primary response field.`
+- For grep-style clustered output, prefer question-style relevance prompts
+  such as `Which lines are relevant to the request shape and primary response
+  field?`
+- For ultra-narrow fact extraction, prefer answer-target prompts such as
+  `Extract only the minimum text needed to answer: what is the request payload
+  shape and what is the primary response field?`
+- Avoid negative-only phrasing such as `Drop examples, framing, and unrelated
+  lines.` The current benchmark retained more text with that wording than with
+  clearer query templates.
+- Avoid line-number-only instructions such as `Return only lines 49, 54, 67,
+  and 68.` The model often kept nearby material anyway.
+
+The practical rule is:
+
+- broader mixed file window -> `Keep exactly the statements that define ...`
+- grep-style clustered output -> `Which lines are relevant to ...?`
+- ultra-narrow fact lookup -> `Extract only the minimum text needed to answer ...`
+
 ## Pruner environment contract
 
 Primary variables:

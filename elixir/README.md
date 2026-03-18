@@ -164,8 +164,8 @@ bounded subtree search, and shell command capture with optional prune-by-focus
 behavior.
 
 See [docs/context_pruner.md](docs/context_pruner.md) for the CLI syntax, env
-contract, verified prune payload, primary `pruned_code` response field, and
-Jeeves reuse notes.
+contract, verified prune payload, primary `pruned_code` response field,
+recommended `--focus` phrasing, and Jeeves reuse notes.
 
 ## Web dashboard
 

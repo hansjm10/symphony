@@ -14,12 +14,368 @@
       "query": "..."
     }
   },
-  "capturedAt": "2026-03-18T14:07:28Z",
+  "capturedAt": "2026-03-18T14:20:46Z",
   "downstreamCodexImpact": {
-    "cases": [],
-    "enabled": false,
-    "measurementPromptShape": "Single-turn prompt that supplies the raw or pruned payload directly and forbids repository inspection or tool use.",
-    "skipReason": "Set MEASURE_CONTEXT_PRUNER_INCLUDE_CODEX=1 to run the optional raw-vs-pruned Codex thread-total comparison."
+    "cases": [
+      {
+        "comparison": {
+          "percentageSavings": 0.19,
+          "prunedTotalTokens": 13457,
+          "rawTotalTokens": 13483,
+          "tokenSavings": 26
+        },
+        "id": "file_window_small_env_contract",
+        "label": "Small env-contract file window",
+        "producerType": "file_window",
+        "prunedVariant": {
+          "commandHints": [],
+          "durationMs": 5505,
+          "finalThreadTotal": {
+            "inputTokens": 13318,
+            "outputTokens": 139,
+            "totalTokens": 13457
+          },
+          "methodsSeen": {
+            "item/agentMessage/delta": 48,
+            "item/completed": 3,
+            "item/started": 3,
+            "thread/status/changed": 2,
+            "thread/tokenUsage/updated": 1,
+            "turn/completed": 1,
+            "turn/started": 1
+          },
+          "promptByteCount": 820,
+          "promptLineCount": 29,
+          "result": {
+            "result": {
+              "result": "turn_completed",
+              "session_id": "019d0152-2424-7861-9d7a-739495ef4510-019d0152-242b-72f2-9e4d-76a9e8c025d1",
+              "thread_id": "019d0152-2424-7861-9d7a-739495ef4510",
+              "turn_id": "019d0152-242b-72f2-9e4d-76a9e8c025d1"
+            },
+            "status": "ok"
+          },
+          "threadTotalSnapshots": [
+            {
+              "inputTokens": 13318,
+              "outputTokens": 139,
+              "totalTokens": 13457
+            }
+          ],
+          "turnCompletedUsage": null,
+          "variant": "file_window_small_env_contract_pruned"
+        },
+        "query": "Keep only the env contract and alias behavior.",
+        "rawVariant": {
+          "commandHints": [],
+          "durationMs": 3944,
+          "finalThreadTotal": {
+            "inputTokens": 13318,
+            "outputTokens": 165,
+            "totalTokens": 13483
+          },
+          "methodsSeen": {
+            "item/agentMessage/delta": 58,
+            "item/completed": 3,
+            "item/started": 3,
+            "thread/status/changed": 2,
+            "thread/tokenUsage/updated": 1,
+            "turn/completed": 1,
+            "turn/started": 1
+          },
+          "promptByteCount": 821,
+          "promptLineCount": 30,
+          "result": {
+            "result": {
+              "result": "turn_completed",
+              "session_id": "019d0152-14e6-7783-a087-62d88229dc78-019d0152-14ee-77b0-b388-6a2118552fd9",
+              "thread_id": "019d0152-14e6-7783-a087-62d88229dc78",
+              "turn_id": "019d0152-14ee-77b0-b388-6a2118552fd9"
+            },
+            "status": "ok"
+          },
+          "threadTotalSnapshots": [
+            {
+              "inputTokens": 13318,
+              "outputTokens": 165,
+              "totalTokens": 13483
+            }
+          ],
+          "turnCompletedUsage": null,
+          "variant": "file_window_small_env_contract_raw"
+        }
+      },
+      {
+        "comparison": {
+          "percentageSavings": 3.41,
+          "prunedTotalTokens": 13637,
+          "rawTotalTokens": 14118,
+          "tokenSavings": 481
+        },
+        "id": "file_window_mixed_contract_section",
+        "label": "Broader contract section file window",
+        "producerType": "file_window",
+        "prunedVariant": {
+          "commandHints": [],
+          "durationMs": 3966,
+          "finalThreadTotal": {
+            "inputTokens": 13451,
+            "outputTokens": 186,
+            "totalTokens": 13637
+          },
+          "methodsSeen": {
+            "item/agentMessage/delta": 92,
+            "item/completed": 3,
+            "item/started": 3,
+            "thread/status/changed": 2,
+            "thread/tokenUsage/updated": 1,
+            "turn/completed": 1,
+            "turn/started": 1
+          },
+          "promptByteCount": 1276,
+          "promptLineCount": 40,
+          "result": {
+            "result": {
+              "result": "turn_completed",
+              "session_id": "019d0152-53c5-7f52-9e00-cf8528e37a4f-019d0152-53cd-7ea3-8cd6-cec2665c59f6",
+              "thread_id": "019d0152-53c5-7f52-9e00-cf8528e37a4f",
+              "turn_id": "019d0152-53cd-7ea3-8cd6-cec2665c59f6"
+            },
+            "status": "ok"
+          },
+          "threadTotalSnapshots": [
+            {
+              "inputTokens": 13451,
+              "outputTokens": 186,
+              "totalTokens": 13637
+            }
+          ],
+          "turnCompletedUsage": null,
+          "variant": "file_window_mixed_contract_section_pruned"
+        },
+        "query": "Keep only the env contract, compatibility alias, request body, and primary response field.",
+        "rawVariant": {
+          "commandHints": [],
+          "durationMs": 6694,
+          "finalThreadTotal": {
+            "inputTokens": 13739,
+            "outputTokens": 379,
+            "totalTokens": 14118
+          },
+          "methodsSeen": {
+            "item/agentMessage/delta": 98,
+            "item/completed": 3,
+            "item/started": 3,
+            "thread/status/changed": 2,
+            "thread/tokenUsage/updated": 1,
+            "turn/completed": 1,
+            "turn/started": 1
+          },
+          "promptByteCount": 2283,
+          "promptLineCount": 60,
+          "result": {
+            "result": {
+              "result": "turn_completed",
+              "session_id": "019d0152-39a3-7860-ad38-7382752d00b4-019d0152-39aa-7b10-a288-be3036dd4383",
+              "thread_id": "019d0152-39a3-7860-ad38-7382752d00b4",
+              "turn_id": "019d0152-39aa-7b10-a288-be3036dd4383"
+            },
+            "status": "ok"
+          },
+          "threadTotalSnapshots": [
+            {
+              "inputTokens": 13739,
+              "outputTokens": 379,
+              "totalTokens": 14118
+            }
+          ],
+          "turnCompletedUsage": null,
+          "variant": "file_window_mixed_contract_section_raw"
+        }
+      },
+      {
+        "comparison": {
+          "percentageSavings": -2.71,
+          "prunedTotalTokens": 14197,
+          "rawTotalTokens": 13822,
+          "tokenSavings": -375
+        },
+        "id": "search_result_remote_metadata_cluster",
+        "label": "Already-clustered metadata grep",
+        "producerType": "search_result",
+        "prunedVariant": {
+          "commandHints": [],
+          "durationMs": 8570,
+          "finalThreadTotal": {
+            "inputTokens": 13623,
+            "outputTokens": 574,
+            "totalTokens": 14197
+          },
+          "methodsSeen": {
+            "item/agentMessage/delta": 139,
+            "item/completed": 3,
+            "item/started": 3,
+            "thread/status/changed": 2,
+            "thread/tokenUsage/updated": 1,
+            "turn/completed": 1,
+            "turn/started": 1
+          },
+          "promptByteCount": 1935,
+          "promptLineCount": 37,
+          "result": {
+            "result": {
+              "result": "turn_completed",
+              "session_id": "019d0152-7420-74a3-b668-0f2e376356a1-019d0152-7428-77c2-b6e9-e5205a53f7d1",
+              "thread_id": "019d0152-7420-74a3-b668-0f2e376356a1",
+              "turn_id": "019d0152-7428-77c2-b6e9-e5205a53f7d1"
+            },
+            "status": "ok"
+          },
+          "threadTotalSnapshots": [
+            {
+              "inputTokens": 13623,
+              "outputTokens": 574,
+              "totalTokens": 14197
+            }
+          ],
+          "turnCompletedUsage": null,
+          "variant": "search_result_remote_metadata_cluster_pruned"
+        },
+        "query": "Keep only the remote verification metadata and what it proved.",
+        "rawVariant": {
+          "commandHints": [],
+          "durationMs": 4310,
+          "finalThreadTotal": {
+            "inputTokens": 13623,
+            "outputTokens": 199,
+            "totalTokens": 13822
+          },
+          "methodsSeen": {
+            "item/agentMessage/delta": 114,
+            "item/completed": 3,
+            "item/started": 3,
+            "thread/status/changed": 2,
+            "thread/tokenUsage/updated": 1,
+            "turn/completed": 1,
+            "turn/started": 1
+          },
+          "promptByteCount": 1935,
+          "promptLineCount": 37,
+          "result": {
+            "result": {
+              "result": "turn_completed",
+              "session_id": "019d0152-6344-78e1-860c-85bd9a4277a9-019d0152-634b-7023-874b-e8165fa303ce",
+              "thread_id": "019d0152-6344-78e1-860c-85bd9a4277a9",
+              "turn_id": "019d0152-634b-7023-874b-e8165fa303ce"
+            },
+            "status": "ok"
+          },
+          "threadTotalSnapshots": [
+            {
+              "inputTokens": 13623,
+              "outputTokens": 199,
+              "totalTokens": 13822
+            }
+          ],
+          "turnCompletedUsage": null,
+          "variant": "search_result_remote_metadata_cluster_raw"
+        }
+      },
+      {
+        "comparison": {
+          "percentageSavings": 1.29,
+          "prunedTotalTokens": 13673,
+          "rawTotalTokens": 13852,
+          "tokenSavings": 179
+        },
+        "id": "search_result_docs_remote_contract_mix",
+        "label": "Docs-only remote-contract grep",
+        "producerType": "search_result",
+        "prunedVariant": {
+          "commandHints": [],
+          "durationMs": 4722,
+          "finalThreadTotal": {
+            "inputTokens": 13495,
+            "outputTokens": 178,
+            "totalTokens": 13673
+          },
+          "methodsSeen": {
+            "item/agentMessage/delta": 39,
+            "item/completed": 3,
+            "item/started": 3,
+            "thread/status/changed": 2,
+            "thread/tokenUsage/updated": 1,
+            "turn/completed": 1,
+            "turn/started": 1
+          },
+          "promptByteCount": 1467,
+          "promptLineCount": 31,
+          "result": {
+            "result": {
+              "result": "turn_completed",
+              "session_id": "019d0152-aa28-7640-8f94-b0806b42e38e-019d0152-aa2f-79a2-81ba-d69293cda498",
+              "thread_id": "019d0152-aa28-7640-8f94-b0806b42e38e",
+              "turn_id": "019d0152-aa2f-79a2-81ba-d69293cda498"
+            },
+            "status": "ok"
+          },
+          "threadTotalSnapshots": [
+            {
+              "inputTokens": 13495,
+              "outputTokens": 178,
+              "totalTokens": 13673
+            }
+          ],
+          "turnCompletedUsage": null,
+          "variant": "search_result_docs_remote_contract_mix_pruned"
+        },
+        "query": "Keep only the remote request shape and primary response field.",
+        "rawVariant": {
+          "commandHints": [],
+          "durationMs": 5162,
+          "finalThreadTotal": {
+            "inputTokens": 13596,
+            "outputTokens": 256,
+            "totalTokens": 13852
+          },
+          "methodsSeen": {
+            "item/agentMessage/delta": 46,
+            "item/completed": 3,
+            "item/started": 3,
+            "thread/status/changed": 2,
+            "thread/tokenUsage/updated": 1,
+            "turn/completed": 1,
+            "turn/started": 1
+          },
+          "promptByteCount": 1797,
+          "promptLineCount": 37,
+          "result": {
+            "result": {
+              "result": "turn_completed",
+              "session_id": "019d0152-9602-7393-bf6c-adda7a693de2-019d0152-960a-7390-b57f-091d1b196a38",
+              "thread_id": "019d0152-9602-7393-bf6c-adda7a693de2",
+              "turn_id": "019d0152-960a-7390-b57f-091d1b196a38"
+            },
+            "status": "ok"
+          },
+          "threadTotalSnapshots": [
+            {
+              "inputTokens": 13596,
+              "outputTokens": 256,
+              "totalTokens": 13852
+            }
+          ],
+          "turnCompletedUsage": null,
+          "variant": "search_result_docs_remote_contract_mix_raw"
+        }
+      }
+    ],
+    "enabled": true,
+    "prunerEndpoint": "http://192.168.1.15:8000/prune",
+    "summary": {
+      "aggregateTokenSavings": 311,
+      "caseCount": 4
+    }
   },
   "measurementId": "IDL-1147",
   "remotePrunerSavings": {
@@ -155,11 +511,11 @@
         "label": "Already-clustered metadata grep",
         "producerCommand": "context-pruner grep --pattern 'origin_token_cnt|left_token_cnt|model_input_token_cnt|pruned_code|JEEVES_PRUNER_URL|PRUNER_URL' --path elixir/docs --context-lines 2 --max-matches 20",
         "producerOutput": {
-          "byteCount": 1165,
+          "byteCount": 1268,
           "exitCode": 0,
           "lineCount": 21,
           "stderr": "",
-          "stdout": "elixir/docs/context_pruner.md-47-Primary variables:\nelixir/docs/context_pruner.md-48-\nelixir/docs/context_pruner.md:49:- `PRUNER_URL`\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\nelixir/docs/context_pruner.md-52-Compatibility alias:\nelixir/docs/context_pruner.md-53-\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n--\nelixir/docs/context_pruner.md-66-- endpoint: `http://192.168.1.15:8000/prune`\nelixir/docs/context_pruner.md-67-- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\nelixir/docs/context_pruner.md-73-## Exit codes\nelixir/docs/context_pruner_token_savings_report.md-69-```\n(truncated 347 lines)"
+          "stdout": "elixir/docs/context_pruner.md-47-Primary variables:\nelixir/docs/context_pruner.md-48-\nelixir/docs/context_pruner.md:49:- `PRUNER_URL`\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\nelixir/docs/context_pruner.md-52-Compatibility alias:\nelixir/docs/context_pruner.md-53-\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n--\nelixir/docs/context_pruner.md-66-- endpoint: `http://192.168.1.15:8000/prune`\nelixir/docs/context_pruner.md-67-- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\nelixir/docs/context_pruner.md-73-## Exit codes\nelixir/docs/context_pruner_token_savings_report.md-22-- Layer 2: optional downstream Codex thread-total impact when the pruned payload is supplied to a full run\n(truncated 359 lines)"
         },
         "producerType": "search_result",
         "prunedCodeChanged": false,
@@ -199,10 +555,10 @@
             20,
             21
           ],
-          "leftTokenCount": 376,
-          "modelInputTokenCount": 459,
-          "originTokenCount": 376,
-          "prunedCode": "elixir/docs/context_pruner.md-47-Primary variables:\nelixir/docs/context_pruner.md-48-\nelixir/docs/context_pruner.md:49:- `PRUNER_URL`\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\nelixir/docs/context_pruner.md-52-Compatibility alias:\nelixir/docs/context_pruner.md-53-\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n--\nelixir/docs/context_pruner.md-66-- endpoint: `http://192.168.1.15:8000/prune`\nelixir/docs/context_pruner.md-67-- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\nelixir/docs/context_pruner.md-73-## Exit codes\nelixir/docs/context_pruner_token_savings_report.md-69-```\n(truncated 347 lines)",
+          "leftTokenCount": 397,
+          "modelInputTokenCount": 480,
+          "originTokenCount": 397,
+          "prunedCode": "elixir/docs/context_pruner.md-47-Primary variables:\nelixir/docs/context_pruner.md-48-\nelixir/docs/context_pruner.md:49:- `PRUNER_URL`\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\nelixir/docs/context_pruner.md-52-Compatibility alias:\nelixir/docs/context_pruner.md-53-\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n--\nelixir/docs/context_pruner.md-66-- endpoint: `http://192.168.1.15:8000/prune`\nelixir/docs/context_pruner.md-67-- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\nelixir/docs/context_pruner.md-73-## Exit codes\nelixir/docs/context_pruner_token_savings_report.md-22-- Layer 2: optional downstream Codex thread-total impact when the pruned payload is supplied to a full run\n(truncated 359 lines)",
           "responseKeys": [
             "error_msg",
             "kept_frags",
@@ -213,7 +569,7 @@
             "score",
             "token_scores"
           ],
-          "score": 0.0015367271844297647
+          "score": 0.0011073392815887928
         }
       },
       {
@@ -226,7 +582,7 @@
           "exitCode": 0,
           "lineCount": 21,
           "stderr": "",
-          "stdout": "elixir/docs/context_pruner.md-47-Primary variables:\nelixir/docs/context_pruner.md-48-\nelixir/docs/context_pruner.md:49:- `PRUNER_URL`\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\nelixir/docs/context_pruner.md-52-Compatibility alias:\nelixir/docs/context_pruner.md-53-\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n--\nelixir/docs/context_pruner.md-65-\nelixir/docs/context_pruner.md-66-- endpoint: `http://192.168.1.15:8000/prune`\nelixir/docs/context_pruner.md:67:- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\nelixir/docs/context_pruner.md-73-## Exit codes\n(truncated 449 lines)"
+          "stdout": "elixir/docs/context_pruner.md-47-Primary variables:\nelixir/docs/context_pruner.md-48-\nelixir/docs/context_pruner.md:49:- `PRUNER_URL`\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\nelixir/docs/context_pruner.md-52-Compatibility alias:\nelixir/docs/context_pruner.md-53-\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n--\nelixir/docs/context_pruner.md-65-\nelixir/docs/context_pruner.md-66-- endpoint: `http://192.168.1.15:8000/prune`\nelixir/docs/context_pruner.md:67:- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\nelixir/docs/context_pruner.md-73-## Exit codes\n(truncated 463 lines)"
         },
         "producerType": "search_result",
         "prunedCodeChanged": true,
@@ -270,7 +626,7 @@
             "score",
             "token_scores"
           ],
-          "score": 0.04535258188843727
+          "score": 0.046378202736377716
         }
       }
     ],
@@ -295,7 +651,7 @@
       "PRUNER_URL"
     ]
   },
-  "workspace": "/home/jordan/code/symphony-workspaces/IDL-1147",
-  "workspaceTree": "1b57342",
-  "workspaceTreeRef": "1b57342effc46f8bf5f17abe59146ff1f28e8f33"
+  "workspace": "/home/jordan/symphony",
+  "workspaceTree": "9c08d99",
+  "workspaceTreeRef": "9c08d9957ce6f3ec75c9ab8cce261867cedc9258"
 }

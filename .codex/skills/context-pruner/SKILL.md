@@ -35,6 +35,27 @@ description:
   - Primary response field: `pruned_code`
   - Compatibility fallbacks: `content`, `text`
 
+## Writing `--focus`
+
+- Treat `--focus` as the remote pruner model's task description, not as a
+  generic "make this shorter" hint.
+- For broader mixed file windows, prefer exact field-definition prompts such as
+  `Keep exactly the statements that define PRUNER_URL, the alias behavior,
+  request body, and primary response field.`
+- For grep-style clustered output, prefer question-style relevance prompts such
+  as `Which lines are relevant to the request shape and primary response
+  field?`
+- For ultra-narrow fact extraction, prefer answer-target prompts such as
+  `Extract only the minimum text needed to answer: what is the request payload
+  shape and what is the primary response field?`
+- Avoid negative-only phrasing like `Drop examples, framing, and unrelated
+  lines.` In the current benchmark it tended to retain more text than the
+  clearer question-style or keep-only prompts.
+- Avoid line-number-only instructions such as `Return only lines 49, 54, 67,
+  and 68`. The model often kept neighboring material anyway.
+- Keep the query concrete and anchored to the fields, behaviors, or contract
+  you actually need from the returned text.
+
 ## When To Prefer It
 
 - Use `read` instead of broad `cat` or `sed` when you know the file and can
@@ -66,7 +87,11 @@ description:
    pruning.
 4. Add `--focus "<question>"` only when the bounded output is still noisier
    than needed.
-5. If pruning fails, keep going with the unpruned output instead of retrying
+5. Write `--focus` to describe the target facts precisely:
+   - broader mixed file window -> `Keep exactly the statements that define ...`
+   - grep-style clustered output -> `Which lines are relevant to ...?`
+   - ultra-narrow fact lookup -> `Extract only the minimum text needed to answer ...`
+6. If pruning fails, keep going with the unpruned output instead of retrying
    in a loop or widening the read.
 
 ## Copy-Paste Examples
@@ -106,20 +131,20 @@ context-pruner grep \
 ```bash
 context-pruner read \
   --file-path elixir/docs/context_pruner.md \
-  --around-line 31 \
-  --radius 12 \
-  --focus "Keep only the env contract and fallback behavior."
+  --start-line 35 \
+  --end-line 77 \
+  --focus "Keep exactly the statements that define PRUNER_URL, the JEEVES_PRUNER_URL alias behavior, the request body, and the primary response field pruned_code."
 
 context-pruner grep \
   --pattern "PRUNER_URL|JEEVES_PRUNER_URL" \
   --path elixir/lib \
   --context-lines 1 \
   --max-matches 12 \
-  --focus "Show only the env variable contract and alias behavior."
+  --focus "Which lines are relevant to the env variable contract and alias behavior?"
 
 context-pruner bash \
   --command "git diff --stat origin/main...HEAD" \
-  --focus "Keep only files related to current context-pruner skill work."
+  --focus "Extract only the minimum text needed to answer: which files are related to current context-pruner skill work?"
 ```
 
 ## Pruner Environment And Verification
@@ -141,9 +166,9 @@ Example verification:
 PRUNER_URL="${PRUNER_URL:-$JEEVES_PRUNER_URL}" \
 context-pruner read \
   --file-path elixir/docs/context_pruner.md \
-  --around-line 31 \
-  --radius 12 \
-  --focus "Keep only the pruner contract."
+  --start-line 35 \
+  --end-line 77 \
+  --focus "Keep exactly the statements that define the pruner env contract, request body, and primary response field."
 ```
 
 ## Fallback Behavior
