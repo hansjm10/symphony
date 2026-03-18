@@ -34,6 +34,8 @@ help with the setup:
 > Set up Symphony for my repository based on
 > https://github.com/openai/symphony/blob/main/elixir/README.md
 
+There is also a Rust implementation in [rust/README.md](rust/README.md).
+
 For this repo itself, after the Elixir app is built, you can also launch the checked-in workflow
 from the repository root with:
 
