@@ -126,6 +126,9 @@ Notes:
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
+- The checked-in workflow also copies the repo's `context-pruner` launcher into `~/.local/bin` and
+  prepends that directory to the Codex PATH, so fresh workspaces can call `context-pruner`
+  directly.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
@@ -153,6 +156,16 @@ codex:
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
 - The dashboard binds `127.0.0.1` by default. Set `server.host: 0.0.0.0` in `WORKFLOW.md` or pass
   `--host 0.0.0.0` to expose it on your LAN.
+
+## Context Pruner CLI
+
+Fresh workspaces can use `context-pruner` directly for focused file reads,
+bounded subtree search, and shell command capture with optional prune-by-focus
+behavior.
+
+See [docs/context_pruner.md](docs/context_pruner.md) for the CLI syntax, env
+contract, verified prune payload, primary `pruned_code` response field, and
+Jeeves reuse notes.
 
 ## Web dashboard
 

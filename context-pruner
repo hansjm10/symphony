@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORIGINAL_CWD="$(pwd -P)"
+
+find_repo_root_from_cwd() {
+  local dir="$ORIGINAL_CWD"
+
+  while [[ "$dir" != "/" ]]; do
+    if [[ -f "$dir/elixir/mix.exs" ]]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+
+    dir="$(dirname "$dir")"
+  done
+
+  return 1
+}
+
+REPO_ROOT="${CONTEXT_PRUNER_REPO_ROOT:-}"
+
+if [[ -z "$REPO_ROOT" && -f "$SCRIPT_DIR/elixir/mix.exs" ]]; then
+  REPO_ROOT="$SCRIPT_DIR"
+fi
+
+if [[ -z "$REPO_ROOT" ]]; then
+  REPO_ROOT="$(find_repo_root_from_cwd || true)"
+fi
+
+if [[ -z "$REPO_ROOT" ]]; then
+  echo "Unable to locate a Symphony checkout from the current directory: $ORIGINAL_CWD" >&2
+  exit 1
+fi
+
+SYMPHONY_DIR="$REPO_ROOT/elixir"
+MISE_BIN="${MISE_BIN:-$(command -v mise || true)}"
+MIX_BIN="${MIX_BIN:-$(command -v mix || true)}"
+
+if [[ ! -f "$SYMPHONY_DIR/mix.exs" ]]; then
+  echo "Symphony Elixir project not found under: $SYMPHONY_DIR" >&2
+  exit 1
+fi
+
+if [[ -z "$MISE_BIN" || ! -x "$MISE_BIN" ]]; then
+  if [[ -z "$MIX_BIN" || ! -x "$MIX_BIN" ]]; then
+    echo "Neither mise nor mix is available; cannot launch context-pruner." >&2
+    exit 127
+  fi
+fi
+
+export CONTEXT_PRUNER_CWD="$ORIGINAL_CWD"
+export LANG="${LANG:-C.UTF-8}"
+export LC_ALL="${LC_ALL:-C.UTF-8}"
+export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu}"
+
+cd "$SYMPHONY_DIR"
+
+if [[ -n "$MISE_BIN" && -x "$MISE_BIN" ]]; then
+  exec env MIX_QUIET=1 "$MISE_BIN" exec -- mix run --no-start -e 'SymphonyElixir.ContextPruner.CLI.main(System.argv())' -- "$@"
+fi
+
+exec env MIX_QUIET=1 "$MIX_BIN" run --no-start -e 'SymphonyElixir.ContextPruner.CLI.main(System.argv())' -- "$@"

@@ -47,6 +47,10 @@ The launcher defaults to:
 - `ENV_FILE=./.env`
 - `SYMPHONY_PORT=8080`
 
+Fresh workspaces created from the checked-in Elixir workflow also install a
+direct `context-pruner` CLI for focused `read`, `grep`, and `bash` flows. See
+[elixir/docs/context_pruner.md](elixir/docs/context_pruner.md).
+
 ---
 
 ## License

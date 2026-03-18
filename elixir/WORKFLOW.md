@@ -22,6 +22,9 @@ workspace:
 hooks:
   after_create: |
     git clone --depth 1 https://github.com/hansjm10/symphony .
+    mkdir -p "$HOME/.local/bin"
+    cp context-pruner "$HOME/.local/bin/context-pruner"
+    chmod 755 "$HOME/.local/bin/context-pruner"
     if command -v mise >/dev/null 2>&1; then
       cd elixir && mise trust && mise exec -- mix deps.get
     fi
@@ -31,7 +34,7 @@ agent:
   max_concurrent_agents: 10
   max_turns: 20
 codex:
-  command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=xhigh --model gpt-5.3-codex app-server
+  command: PATH="$HOME/.local/bin:$PATH" codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=xhigh --model gpt-5.3-codex app-server
   approval_policy: never
   thread_sandbox: danger-full-access
   turn_sandbox_policy:
