@@ -8,7 +8,7 @@ defmodule SymphonyElixir.ContextPruner.CLI do
   exist only as internal compatibility helpers behind that remote-first flow.
   """
 
-  alias SymphonyElixir.ContextPruner.Pruner
+  alias SymphonyElixir.ContextPruner.{Pruner, Scope}
 
   @default_max_matches 200
   @default_radius 20
@@ -94,7 +94,8 @@ defmodule SymphonyElixir.ContextPruner.CLI do
       true ->
         with {:ok, query} <- require_lookup_query(opts),
              {:ok, source_kind} <- resolve_lookup_source_kind(opts),
-             :ok <- validate_lookup_selector_options(source_kind, opts) do
+             :ok <- validate_lookup_selector_options(source_kind, opts),
+             :ok <- validate_lookup_backend_constraints(source_kind, opts) do
           dispatch_lookup(source_kind, opts, query)
         else
           {:error, message} ->
@@ -202,9 +203,12 @@ defmodule SymphonyElixir.ContextPruner.CLI do
   defp read_file_content(file_path, opts) do
     resolved_path = resolve_path(file_path)
 
-    case File.read(resolved_path) do
-      {:ok, content} ->
-        {:ok, maybe_window_file_content(content, opts)}
+    with :ok <- ensure_scope_allowed(resolved_path),
+         {:ok, content} <- File.read(resolved_path) do
+      {:ok, maybe_window_file_content(content, opts)}
+    else
+      {:error, :scope_violation} ->
+        {:error, scope_violation_message(resolved_path)}
 
       {:error, reason} ->
         {:error, "Error reading file: #{resolved_path}: #{:file.format_error(reason)}"}
@@ -255,17 +259,25 @@ defmodule SymphonyElixir.ContextPruner.CLI do
 
   defp grep(regex, opts) do
     cwd = current_working_directory()
+    scope = current_scope()
     context_lines = Keyword.get(opts, :context_lines, 0)
     max_matches = Keyword.get(opts, :max_matches, @default_max_matches)
     search_path = resolve_path(Keyword.get(opts, :path, "."))
 
-    with {:ok, files} <- collect_files(search_path) do
+    with :ok <- ensure_scope_allowed(search_path),
+         {:ok, files} <- scoped_grep_files(search_path, scope) do
       {outputs, errors} =
         Enum.reduce(files, {[], []}, fn file_path, acc ->
           accumulate_grep_result(file_path, regex, cwd, context_lines, acc)
         end)
 
       build_grep_result(outputs, errors, max_matches)
+    else
+      {:error, :scope_violation} ->
+        %{exit_code: 2, stderr: scope_violation_message(search_path), stdout: ""}
+
+      {:error, message} ->
+        %{exit_code: 2, stderr: message, stdout: ""}
     end
   end
 
@@ -363,20 +375,30 @@ defmodule SymphonyElixir.ContextPruner.CLI do
   end
 
   defp execute_bash(command, focus) do
-    with {:ok, shell} <- resolve_shell(),
-         {:ok, stdout, stderr, exit_code} <- run_shell_command(shell, command) do
-      rendered_output = format_bash_output(stdout, stderr, exit_code)
+    case Pruner.codex_backend?() do
+      true ->
+        %{
+          exit_code: 2,
+          stderr: "`context-pruner lookup --command ...` is disabled when `CONTEXT_PRUNER_BACKEND=codex`; use bounded --file-path or --pattern lookups instead.",
+          stdout: ""
+        }
 
-      {pruned_output, warnings} =
-        case rendered_output do
-          "(no output)" -> {rendered_output, []}
-          _ -> maybe_prune(rendered_output, focus)
+      false ->
+        with {:ok, shell} <- resolve_shell(),
+             {:ok, stdout, stderr, exit_code} <- run_shell_command(shell, command) do
+          rendered_output = format_bash_output(stdout, stderr, exit_code)
+
+          {pruned_output, warnings} =
+            case rendered_output do
+              "(no output)" -> {rendered_output, []}
+              _ -> maybe_prune(rendered_output, focus)
+            end
+
+          build_result(pruned_output, warnings, exit_code)
+        else
+          {:error, message, exit_code} ->
+            %{exit_code: exit_code, stderr: message, stdout: ""}
         end
-
-      build_result(pruned_output, warnings, exit_code)
-    else
-      {:error, message, exit_code} ->
-        %{exit_code: exit_code, stderr: message, stdout: ""}
     end
   end
 
@@ -579,6 +601,32 @@ defmodule SymphonyElixir.ContextPruner.CLI do
     ])
   end
 
+  defp validate_lookup_backend_constraints(:bash, _opts) do
+    case Pruner.codex_backend?() do
+      true ->
+        {:error, "`context-pruner lookup --command ...` is disabled when `CONTEXT_PRUNER_BACKEND=codex`; use bounded --file-path or --pattern lookups instead."}
+
+      false ->
+        :ok
+    end
+  end
+
+  defp validate_lookup_backend_constraints(:read, opts) do
+    case Pruner.codex_backend?() do
+      true ->
+        if explicit_read_window?(opts) do
+          :ok
+        else
+          {:error, "Codex-backed file lookups require `--start-line/--end-line` or `--around-line/--radius` so the read scope stays bounded."}
+        end
+
+      false ->
+        :ok
+    end
+  end
+
+  defp validate_lookup_backend_constraints(_source_kind, _opts), do: :ok
+
   defp reject_lookup_options(opts, disallowed_keys) do
     present =
       disallowed_keys
@@ -658,6 +706,10 @@ defmodule SymphonyElixir.ContextPruner.CLI do
     "--" <> (key |> Atom.to_string() |> String.replace("_", "-"))
   end
 
+  defp explicit_read_window?(opts) do
+    (is_integer(opts[:start_line]) and is_integer(opts[:end_line])) or is_integer(opts[:around_line])
+  end
+
   defp resolve_path(path) do
     case Path.type(path) do
       :absolute -> Path.expand(path)
@@ -686,6 +738,29 @@ defmodule SymphonyElixir.ContextPruner.CLI do
     case File.read(path) do
       {:ok, output} -> output
       {:error, _reason} -> ""
+    end
+  end
+
+  defp current_scope do
+    current_working_directory()
+    |> Scope.config(System.get_env())
+  end
+
+  defp ensure_scope_allowed(path) do
+    case Scope.allowed?(path, current_scope()) do
+      true -> :ok
+      false -> {:error, :scope_violation}
+    end
+  end
+
+  defp scope_violation_message(path) do
+    Scope.violation_message(path, current_scope())
+  end
+
+  defp scoped_grep_files(search_path, scope) do
+    case Scope.constrained?(scope) do
+      true -> Scope.allowed_files_within(search_path, scope)
+      false -> collect_files(search_path)
     end
   end
 

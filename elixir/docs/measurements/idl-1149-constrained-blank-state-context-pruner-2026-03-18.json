@@ -1,0 +1,169 @@
+{
+  "artifacts": {
+    "jsonPath": "elixir/docs/measurements/idl-1149-constrained-blank-state-context-pruner-2026-03-18.json",
+    "markdownPath": "elixir/docs/measurements/idl-1149-constrained-blank-state-context-pruner-2026-03-18.md",
+    "scriptPath": "elixir/scripts/measure_context_pruner_token_savings.exs"
+  },
+  "capturedAt": "2026-03-18T16:25:58Z",
+  "constraintProbes": {
+    "commandSourceProbe": {
+      "exitCode": 2,
+      "stderr": "`context-pruner lookup --command ...` is disabled when `CONTEXT_PRUNER_BACKEND=codex`; use bounded --file-path or --pattern lookups instead.\n\nUsage:\n  context-pruner lookup --query <query> --file-path <path> [--start-line <n> --end-line <n>]\n  context-pruner lookup --query <query> --file-path <path> [--around-line <n> --radius <n>]\n  context-pruner lookup --query <query> --pattern <regex> --path <path> [--context-lines <n>] [--max-matches <n>]\n  context-pruner lookup --query <query> --command <shell-command>\n\nOptions:\n  --query <query>       Required remote retention goal submitted as { code, query }.\n  --file-path <path>    File source for a bounded lookup window.\n  --start-line <n>      1-based inclusive start line for file-window lookups.\n  --end-line <n>        1-based inclusive end line for file-window lookups.\n  --around-line <n>     1-based anchor line for around/radius file-window lookups.\n  --radius <n>          Context radius used with --around-line. Default: 20\n  --pattern <regex>     Grep-style source selector used before remote lookup.\n  --path <path>         Required explicit file or directory scope for grep lookups.\n  --context-lines <n>   Number of surrounding lines to include. Max: 50\n  --max-matches <n>     Maximum output lines before truncation. Default: 200\n  --command <command>   Exception-only shell source when the answer cannot come directly from files.\n  --focus <query>       Deprecated compatibility alias for --query.\n",
+      "stdout": ""
+    },
+    "scopeEscapeProbe": {
+      "exitCode": 1,
+      "stderr": "Path is outside the configured context-pruner scope: /home/jordan/code/symphony-workspaces/IDL-1149/SPEC.md. Allowed scope: roots=elixir/docs",
+      "stdout": ""
+    }
+  },
+  "lookupBackend": {
+    "isolationContract": {
+      "forbidden": [
+        "repo reads outside the local selector result",
+        "arbitrary `lookup --command` sources",
+        "file reads outside `CONTEXT_PRUNER_ALLOWED_ROOTS`/`PATHS`/`GLOBS`"
+      ],
+      "notInherited": [
+        "the parent Codex session id",
+        "the parent workflow prompt",
+        "the parent repo working directory",
+        "the parent HOME/.codex config tree"
+      ],
+      "passedIn": [
+        "bounded query text",
+        "bounded source text from the local selector",
+        "explicit Codex model selection",
+        "explicit auth material through passthrough env or CONTEXT_PRUNER_CODEX_AUTH_FILE",
+        "narrow env passthrough list for auth/network only"
+      ],
+      "workerCwd": "fresh temporary directory outside the repository"
+    },
+    "kind": "codex",
+    "model": "gpt-5.3-codex-spark",
+    "reasoningEffort": "low",
+    "scope": {
+      "allowedRoots": [
+        "elixir/docs"
+      ]
+    },
+    "warnings": []
+  },
+  "mainThreadComparison": {
+    "caseId": "env_contract_lookup",
+    "comparison": {
+      "inlineTotalTokens": 14312,
+      "lookupTotalTokens": 13588,
+      "percentageSavings": 5.06,
+      "tokenSavings": 724
+    },
+    "inlineVariant": {
+      "commandHints": [
+        "sed -n '94,179p' elixir/docs/context_pruner.md"
+      ],
+      "durationMs": 12822,
+      "finalThreadTotal": {
+        "inputTokens": 14190,
+        "outputTokens": 122,
+        "totalTokens": 14312
+      },
+      "methodsSeen": {
+        "item/agentMessage/delta": 74,
+        "item/completed": 3,
+        "item/started": 3,
+        "thread/status/changed": 2,
+        "thread/tokenUsage/updated": 1,
+        "turn/completed": 1,
+        "turn/started": 1
+      },
+      "promptByteCount": 3758,
+      "promptLineCount": 107,
+      "result": {
+        "result": {
+          "result": "turn_completed",
+          "session_id": "019d01c4-b2d7-7c71-ac7d-9b12183a300c-019d01c4-b2df-7e60-952d-65f0ca36306a",
+          "thread_id": "019d01c4-b2d7-7c71-ac7d-9b12183a300c",
+          "turn_id": "019d01c4-b2df-7e60-952d-65f0ca36306a"
+        },
+        "status": "ok"
+      },
+      "threadTotalSnapshots": [
+        {
+          "inputTokens": 14190,
+          "outputTokens": 122,
+          "totalTokens": 14312
+        }
+      ],
+      "turnCompletedUsage": null,
+      "variant": "env_contract_lookup_inline"
+    },
+    "lookupPreparation": {
+      "command": "context-pruner lookup --query \"Keep only the preferred remote env vars, the compatibility alias rule, the request body shape, and the primary response field.\" --file-path elixir/docs/context_pruner.md --start-line 94 --end-line 179",
+      "exitCode": 0,
+      "returnedByteCount": 194,
+      "returnedLineCount": 5,
+      "returnedText": "- `PRUNER_URL`\n- `PRUNER_TIMEOUT_MS`\n- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset\n- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\n- primary response field: `pruned_code`",
+      "stderr": "",
+      "tokenSavingsRequires": "The lookup worker runs before the measured main-thread turn; only the returned excerpt enters the measured prompt."
+    },
+    "lookupVariant": {
+      "commandHints": [
+        "context-pruner lookup --query \"Keep only the preferred remote env vars, the compatibility alias rule, the request body shape, and the primary response field.\" --file-path elixir/docs/context_pruner.md --start-line 94 --end-line 179"
+      ],
+      "durationMs": 15510,
+      "finalThreadTotal": {
+        "inputTokens": 13406,
+        "outputTokens": 182,
+        "totalTokens": 13588
+      },
+      "methodsSeen": {
+        "item/agentMessage/delta": 74,
+        "item/completed": 3,
+        "item/started": 3,
+        "thread/status/changed": 2,
+        "thread/tokenUsage/updated": 1,
+        "turn/completed": 1,
+        "turn/started": 1
+      },
+      "promptByteCount": 1035,
+      "promptLineCount": 25,
+      "result": {
+        "result": {
+          "result": "turn_completed",
+          "session_id": "019d01c4-e4ba-79b0-bbae-a642eccbab93-019d01c4-e4c3-7030-8335-f26ae1843657",
+          "thread_id": "019d01c4-e4ba-79b0-bbae-a642eccbab93",
+          "turn_id": "019d01c4-e4c3-7030-8335-f26ae1843657"
+        },
+        "status": "ok"
+      },
+      "threadTotalSnapshots": [
+        {
+          "inputTokens": 13406,
+          "outputTokens": 182,
+          "totalTokens": 13588
+        }
+      ],
+      "turnCompletedUsage": null,
+      "variant": "env_contract_lookup_lookup"
+    },
+    "sourceWindow": {
+      "endLine": 179,
+      "filePath": "elixir/docs/context_pruner.md",
+      "inlineSourceCommand": "sed -n '94,179p' elixir/docs/context_pruner.md",
+      "sourceByteCount": 3111,
+      "sourceLineCount": 86,
+      "startLine": 94
+    }
+  },
+  "measurementId": "IDL-1149",
+  "rerun": {
+    "defaultCommand": "cd elixir && mise exec -- mix run --no-start scripts/measure_context_pruner_token_savings.exs",
+    "lookupAuthFileEnv": "MEASURE_CONTEXT_PRUNER_LOOKUP_CODEX_AUTH_FILE",
+    "lookupCodexBinEnv": "MEASURE_CONTEXT_PRUNER_LOOKUP_CODEX_BIN",
+    "lookupModelEnv": "MEASURE_CONTEXT_PRUNER_LOOKUP_MODEL",
+    "lookupReasoningEnv": "MEASURE_CONTEXT_PRUNER_LOOKUP_REASONING_EFFORT"
+  },
+  "workspace": "/home/jordan/code/symphony-workspaces/IDL-1149",
+  "workspaceTree": "520508e",
+  "workspaceTreeRef": "520508e615536da4d1b0861d5648c8b8df6183ca"
+}

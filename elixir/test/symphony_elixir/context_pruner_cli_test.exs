@@ -13,13 +13,33 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
     File.mkdir_p!(temp_dir)
 
     previous_env = %{
+      "CODEX_SESSION_ID" => System.get_env("CODEX_SESSION_ID"),
+      "CONTEXT_PRUNER_ALLOWED_GLOBS" => System.get_env("CONTEXT_PRUNER_ALLOWED_GLOBS"),
+      "CONTEXT_PRUNER_ALLOWED_PATHS" => System.get_env("CONTEXT_PRUNER_ALLOWED_PATHS"),
+      "CONTEXT_PRUNER_ALLOWED_ROOTS" => System.get_env("CONTEXT_PRUNER_ALLOWED_ROOTS"),
+      "CONTEXT_PRUNER_BACKEND" => System.get_env("CONTEXT_PRUNER_BACKEND"),
       "CONTEXT_PRUNER_CWD" => System.get_env("CONTEXT_PRUNER_CWD"),
+      "CONTEXT_PRUNER_CODEX_AUTH_FILE" => System.get_env("CONTEXT_PRUNER_CODEX_AUTH_FILE"),
+      "CONTEXT_PRUNER_CODEX_BIN" => System.get_env("CONTEXT_PRUNER_CODEX_BIN"),
+      "CONTEXT_PRUNER_CODEX_ENV_PASSTHROUGH" => System.get_env("CONTEXT_PRUNER_CODEX_ENV_PASSTHROUGH"),
+      "CONTEXT_PRUNER_MODEL" => System.get_env("CONTEXT_PRUNER_MODEL"),
+      "CONTEXT_PRUNER_REASONING_EFFORT" => System.get_env("CONTEXT_PRUNER_REASONING_EFFORT"),
       "JEEVES_PRUNER_URL" => System.get_env("JEEVES_PRUNER_URL"),
       "PRUNER_TIMEOUT_MS" => System.get_env("PRUNER_TIMEOUT_MS"),
       "PRUNER_URL" => System.get_env("PRUNER_URL")
     }
 
+    System.delete_env("CODEX_SESSION_ID")
+    System.delete_env("CONTEXT_PRUNER_ALLOWED_GLOBS")
+    System.delete_env("CONTEXT_PRUNER_ALLOWED_PATHS")
+    System.delete_env("CONTEXT_PRUNER_ALLOWED_ROOTS")
+    System.delete_env("CONTEXT_PRUNER_BACKEND")
     System.put_env("CONTEXT_PRUNER_CWD", temp_dir)
+    System.delete_env("CONTEXT_PRUNER_CODEX_AUTH_FILE")
+    System.delete_env("CONTEXT_PRUNER_CODEX_BIN")
+    System.delete_env("CONTEXT_PRUNER_CODEX_ENV_PASSTHROUGH")
+    System.delete_env("CONTEXT_PRUNER_MODEL")
+    System.delete_env("CONTEXT_PRUNER_REASONING_EFFORT")
     System.delete_env("JEEVES_PRUNER_URL")
     System.delete_env("PRUNER_TIMEOUT_MS")
     System.delete_env("PRUNER_URL")
@@ -242,6 +262,134 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
     end)
   end
 
+  test "lookup supports blank-state codex pruning with bounded file windows", %{temp_dir: temp_dir} do
+    File.write!(Path.join(temp_dir, "sample.txt"), "function alpha() {}\nfunction beta() {}\n")
+    System.put_env("CODEX_SESSION_ID", "parent-session-123")
+
+    with_fake_codex(fn codex_bin, trace_file ->
+      auth_file = Path.join(temp_dir, "auth.json")
+      File.write!(auth_file, ~s({"token":"test"}))
+
+      System.put_env("CONTEXT_PRUNER_ALLOWED_ROOTS", temp_dir)
+      System.put_env("CONTEXT_PRUNER_BACKEND", "codex")
+      System.put_env("CONTEXT_PRUNER_CODEX_AUTH_FILE", auth_file)
+      System.put_env("CONTEXT_PRUNER_CODEX_BIN", codex_bin)
+      System.put_env("CONTEXT_PRUNER_MODEL", "gpt-5.3-codex-spark")
+
+      result =
+        CLI.evaluate([
+          "lookup",
+          "--query",
+          "Keep only beta.",
+          "--file-path",
+          "sample.txt",
+          "--start-line",
+          "1",
+          "--end-line",
+          "2"
+        ])
+
+      assert result.exit_code == 0
+      assert result.stderr == ""
+      assert result.stdout == "function beta() {}"
+
+      trace = File.read!(trace_file)
+      assert trace =~ "--ephemeral"
+      assert trace =~ "--skip-git-repo-check"
+      assert trace =~ "--sandbox read-only"
+      assert trace =~ "--model gpt-5.3-codex-spark"
+      assert trace =~ "model_reasoning_effort=low"
+      assert trace =~ "Keep only beta."
+      assert trace =~ "1: function alpha() {}"
+      assert trace =~ "2: function beta() {}"
+      refute trace =~ "parent-session-123"
+      refute trace =~ "CONTEXT_PRUNER_CWD=#{temp_dir}"
+      refute trace =~ "HOME=/home/"
+      refute trace =~ "PWD=#{temp_dir}"
+      assert trace =~ "AUTH_FILE_PRESENT=yes"
+      assert trace =~ "SESSIONS_DIR_PRESENT=no"
+    end)
+  end
+
+  test "lookup rejects command sources when the codex backend is enabled" do
+    System.put_env("CONTEXT_PRUNER_BACKEND", "codex")
+
+    result =
+      CLI.evaluate([
+        "lookup",
+        "--query",
+        "Summarize alpha.",
+        "--command",
+        "printf 'alpha'"
+      ])
+
+    assert result.exit_code == 2
+    assert result.stderr =~ "disabled when `CONTEXT_PRUNER_BACKEND=codex`"
+    assert result.stdout == ""
+  end
+
+  test "lookup requires an explicit read window when the codex backend is enabled", %{
+    temp_dir: temp_dir
+  } do
+    File.write!(Path.join(temp_dir, "sample.txt"), "alpha\nbeta\n")
+    System.put_env("CONTEXT_PRUNER_BACKEND", "codex")
+
+    result =
+      CLI.evaluate([
+        "lookup",
+        "--query",
+        "Keep only beta.",
+        "--file-path",
+        "sample.txt"
+      ])
+
+    assert result.exit_code == 2
+    assert result.stderr =~ "require `--start-line/--end-line` or `--around-line/--radius`"
+    assert result.stdout == ""
+  end
+
+  test "lookup rejects file paths outside the configured scope before codex execution", %{
+    temp_dir: temp_dir
+  } do
+    outside_root =
+      Path.join(
+        System.tmp_dir!(),
+        "context-pruner-outside-scope-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      outside_file = Path.join(outside_root, "sample.txt")
+      File.mkdir_p!(outside_root)
+      File.write!(outside_file, "alpha\nbeta\n")
+
+      with_fake_codex(fn codex_bin, trace_file ->
+        System.put_env("CONTEXT_PRUNER_ALLOWED_ROOTS", temp_dir)
+        System.put_env("CONTEXT_PRUNER_BACKEND", "codex")
+        System.put_env("CONTEXT_PRUNER_CODEX_BIN", codex_bin)
+
+        result =
+          CLI.evaluate([
+            "lookup",
+            "--query",
+            "Keep only beta.",
+            "--file-path",
+            outside_file,
+            "--start-line",
+            "1",
+            "--end-line",
+            "2"
+          ])
+
+        assert result.exit_code == 1
+        assert result.stderr =~ "outside the configured context-pruner scope"
+        assert result.stdout == ""
+        refute File.exists?(trace_file)
+      end)
+    after
+      File.rm_rf(outside_root)
+    end
+  end
+
   defp with_pruner_server(status, response_body, fun) do
     {:ok, listener} =
       :gen_tcp.listen(0, [
@@ -332,6 +480,65 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
   defp maybe_content_length_header(name, value) do
     if String.downcase(name) == "content-length" do
       value |> String.trim() |> String.to_integer()
+    end
+  end
+
+  defp with_fake_codex(fun) do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "context-pruner-fake-codex-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(test_root)
+    codex_bin = Path.join(test_root, "fake-codex")
+    trace_file = Path.join(test_root, "trace.txt")
+
+    File.write!(codex_bin, """
+    #!/bin/sh
+    trace_file="#{trace_file}"
+    all_args="$*"
+    output_path=""
+
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -o|--output-last-message)
+          output_path="$2"
+          shift 2
+          ;;
+        --output-schema)
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+
+    prompt="$(cat)"
+
+    {
+      printf 'PWD=%s\\n' "$(pwd)"
+      printf 'HOME=%s\\n' "${HOME:-}"
+      printf 'CODEX_SESSION_ID=%s\\n' "${CODEX_SESSION_ID:-}"
+      printf 'CONTEXT_PRUNER_CWD=%s\\n' "${CONTEXT_PRUNER_CWD:-}"
+      if [ -f "$HOME/.codex/auth.json" ]; then auth_present=yes; else auth_present=no; fi
+      if [ -d "$HOME/.codex/sessions" ]; then sessions_present=yes; else sessions_present=no; fi
+      printf 'AUTH_FILE_PRESENT=%s\\n' "$auth_present"
+      printf 'SESSIONS_DIR_PRESENT=%s\\n' "$sessions_present"
+      printf 'ARGS=%s\\n' "$all_args"
+      printf 'PROMPT<<EOF\\n%s\\nEOF\\n' "$prompt"
+    } > "$trace_file"
+
+    printf '%s' '{"pruned_text":"function beta() {}"}' > "$output_path"
+    """)
+
+    File.chmod!(codex_bin, 0o755)
+
+    try do
+      fun.(codex_bin, trace_file)
+    after
+      File.rm_rf(test_root)
     end
   end
 end

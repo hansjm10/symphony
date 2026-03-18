@@ -92,13 +92,19 @@ Instructions:
 
 ## Context discovery and reads
 
-- `context-pruner` is the remote-model-backed context lookup CLI. When the agent is trying to find repository context, it must start with `context-pruner lookup` before any broad `cat`, `sed`, `rg`, or ad hoc shell output.
+- `context-pruner` is the low-context lookup CLI for repository discovery. Its job is to keep the main thread lean by offloading bounded context-finding work and returning only the minimum relevant result.
+- When the agent is trying to find repository context, it must start with `context-pruner lookup` before any broad `cat`, `sed`, `rg`, or ad hoc shell output.
 - The CLI shape was adapted from prior Jeeves work. For reuse-first background, see `/work/jeeves/docs/mcp-pruner-cli-report.md` and `/work/jeeves/packages/mcp-pruner/`.
 - Open `.codex/skills/context-pruner/SKILL.md` before discovery work when the skill is available, and follow its required lookup-first guidance.
 - Start with the narrowest lookup source that can answer the question:
   - `context-pruner lookup --query "<goal>" --file-path <path> --start-line <n> --end-line <n>` or `--around-line <n> --radius <n>` for known files.
   - `context-pruner lookup --query "<goal>" --pattern <regex> --path <path> --context-lines <n> --max-matches <n>` for bounded search.
   - `context-pruner lookup --query "<goal>" --command "<command>"` only when the answer must come from shell output rather than directly from files.
+- When `CONTEXT_PRUNER_BACKEND=codex`, treat the lookup worker as blank-state and constrained:
+  - it must not inherit parent session state, workflow prompt state, repo cwd, or the full `HOME/.codex` tree
+  - pass auth explicitly through `CONTEXT_PRUNER_CODEX_AUTH_FILE` or env passthrough
+  - restrict reads with `CONTEXT_PRUNER_ALLOWED_ROOTS`, `CONTEXT_PRUNER_ALLOWED_PATHS`, or `CONTEXT_PRUNER_ALLOWED_GLOBS`
+  - `lookup --command` is forbidden and file lookups require an explicit line window
 - Phrase `--query` as the exact retention goal for the remote pruner:
   - broader mixed file window -> `Keep exactly the statements that define ...`
   - grep-style clustered output -> `Which lines are relevant to ...?`
