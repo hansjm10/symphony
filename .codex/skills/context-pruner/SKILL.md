@@ -15,7 +15,9 @@ description:
   - submits `{ code, query }` to the configured pruner service
   - returns the pruned result, or the original bounded source with a warning if the remote prune step is unavailable
 - This skill exists to change agent behavior, not just to document a command:
-  when you are trying to find repository context, start with `context-pruner lookup` instead of broad `cat`, `sed`, `rg`, or ad hoc shell output.
+  when you are trying to find repository context, start with
+  `context-pruner lookup` instead of broad `cat`, `sed`, `rg`, or ad hoc shell
+  output.
 - In fresh Symphony workspaces the launcher should be on `PATH` as
   `context-pruner`. In a repo checkout you can also invoke `./context-pruner`
   from the repo root.
@@ -53,14 +55,34 @@ description:
 
 ## Query Phrasing
 
-- Phrase `--query` as the specific retention goal for the remote pruner.
-- Good patterns:
-  - broader mixed file window -> `Keep exactly the statements that define ...`
-  - grep-style clustered output -> `Which lines are relevant to ...?`
-  - ultra-narrow fact lookup -> `Extract only the minimum text needed to answer ...`
-- Avoid:
-  - negative-only phrasing such as `Drop examples, framing, and unrelated lines.`
-  - line-number-only phrasing such as `Return only lines 49, 54, 67, and 68.`
+- Treat `--query` as the remote pruner model's task description, not as a
+  generic "make this shorter" hint.
+- For broader mixed file windows, prefer exact field-definition prompts such as
+  `Keep exactly the statements that define PRUNER_URL, the alias behavior,
+  request body, and primary response field.`
+- For grep-style clustered output, prefer question-style relevance prompts such
+  as `Which lines are relevant to the request shape and primary response
+  field?`
+- For ultra-narrow fact extraction, prefer answer-target prompts such as
+  `Extract only the minimum text needed to answer: what is the request payload
+  shape and what is the primary response field?`
+- Avoid negative-only phrasing such as `Drop examples, framing, and unrelated
+  lines.` In the current benchmark it tended to retain more text than the
+  clearer question-style or keep-only prompts.
+- Avoid line-number-only instructions such as `Return only lines 49, 54, 67,
+  and 68`. The model often kept neighboring material anyway.
+- Keep the query concrete and anchored to the fields, behaviors, or contract
+  you actually need from the returned text.
+
+## Exceptions
+
+- Tiny one-line reads or obviously small outputs such as `git status --short`
+  can use ordinary shell commands directly when you are not performing
+  repository context discovery.
+- Interactive commands, streaming output, or cases where you need exact raw
+  bytes should stay with normal shell tooling.
+- If the CLI cannot express the search you need, use a targeted fallback such
+  as `rg -n` or `sed -n`, but keep it narrow.
 
 ## Copy-Paste Examples
 
