@@ -1,23 +1,14 @@
 # Context Pruner CLI
 
-Symphony now ships a direct shell-facing `context-pruner` launcher for the
-common `read`, `grep`, and `bash` context-gathering flows.
+Symphony ships `context-pruner` as a remote-model-backed context lookup CLI.
 
-This implementation is intentionally small. It adapts the useful behavior and
-HTTP prune contract from the Jeeves reference work under:
+The supported interface is `context-pruner lookup`. It captures a bounded local
+source, submits `{ code, query }` to the configured remote pruner, and returns
+the pruned result. If the remote prune step is unavailable, the CLI falls back
+to the original bounded source and emits a warning on stderr.
 
-- `/work/jeeves/docs/mcp-pruner-cli-report.md`
-- `/work/jeeves/packages/mcp-pruner/src/pruner.ts`
-- `/work/jeeves/packages/mcp-pruner/src/platform.ts`
-- `/work/jeeves/packages/mcp-pruner/src/tools/read.ts`
-- `/work/jeeves/packages/mcp-pruner/src/tools/bash.ts`
-- `/work/jeeves/packages/mcp-pruner/src/tools/grep.ts`
-
-Symphony does not depend on the Jeeves repo at runtime. The code lives entirely
-in this repository under:
-
-- `context-pruner`
-- `elixir/lib/symphony_elixir/context_pruner/*`
+Direct `read`, `grep`, and `bash` subcommands are deprecated compatibility
+entrypoints and are no longer the intended long-term interface.
 
 ## Workspace availability
 
@@ -30,17 +21,46 @@ The checked-in `elixir/WORKFLOW.md` bootstrap now:
 That makes `context-pruner` directly callable from agent shells inside fresh
 Symphony workspaces created by the default `after_create` flow.
 
-## Commands
+## Supported lookup flow
+
+Use `lookup` with a required remote query and one bounded source selector:
 
 ```bash
-context-pruner read --file-path path/to/file.ex --start-line 10 --end-line 30
-context-pruner read --file-path path/to/file.ex --around-line 120 --radius 12
-context-pruner grep --pattern "context-pruner" --path elixir/lib --context-lines 2 --max-matches 40
-context-pruner bash --command "git status --short"
+context-pruner lookup \
+  --query "Keep exactly the statements that define the env contract." \
+  --file-path elixir/docs/context_pruner.md \
+  --around-line 45 \
+  --radius 12
+
+context-pruner lookup \
+  --query "Which lines are relevant to the env variable alias behavior?" \
+  --pattern "PRUNER_URL|JEEVES_PRUNER_URL" \
+  --path elixir/lib \
+  --context-lines 1 \
+  --max-matches 12
+
+context-pruner lookup \
+  --query "Keep only the files related to the current branch diff." \
+  --command "git diff --stat origin/main...HEAD"
 ```
 
-Add `--focus "<question>"` to any command to request remote pruning before the
-content enters model context.
+Guidance:
+
+- start with the smallest file window, grep scope, or shell command that can
+  answer the question
+- use `--command` only when the answer must come from shell output rather than
+  directly from files
+- phrase `--query` as the exact retention goal for the remote pruner
+
+Examples of effective query phrasing:
+
+- broader mixed file window: `Keep exactly the statements that define ...`
+- grep-style clustered output: `Which lines are relevant to ...?`
+- ultra-narrow fact lookup: `Extract only the minimum text needed to answer ...`
+
+Avoid negative-only phrasing such as `Drop examples, framing, and unrelated
+lines.` and avoid line-number-only phrasing such as `Return only lines 49, 54,
+67, and 68.`
 
 ## Pruner environment contract
 
@@ -56,7 +76,7 @@ Compatibility alias:
 Timeout defaults to `30000` ms and is clamped to `100..300000`.
 
 If pruning is disabled or the remote call fails, the CLI falls back to the
-original unpruned output and emits a warning on stderr.
+original bounded output and emits a warning on stderr.
 
 ## Verified request and response shape
 
@@ -70,8 +90,11 @@ Verified on 2026-03-18 against the remote service referenced in
 Symphony also accepts `content` or `text` as compatibility fallbacks, but the
 documented primary contract is `pruned_code`.
 
-## Exit codes
+## Exit behavior
 
-- `read`: `0` success, `1` file/runtime failure, `2` invalid CLI arguments
-- `grep`: `0` matches found, `1` no matches, `2` invalid regex or filesystem/runtime failure
-- `bash`: child exit code when the command runs, `1` launcher/runtime failure, `2` invalid CLI arguments, `127` no usable shell
+`lookup` preserves the exit behavior of the bounded source selector that fed the
+remote prune step:
+
+- file-window lookup: `0` success, `1` file/runtime failure, `2` invalid CLI arguments
+- grep lookup: `0` matches found, `1` no matches, `2` invalid regex or filesystem/runtime failure
+- command lookup: child exit code when the command runs, `1` launcher/runtime failure, `2` invalid CLI arguments, `127` no usable shell

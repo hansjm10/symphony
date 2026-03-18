@@ -60,7 +60,8 @@ The launcher defaults to:
 - `SYMPHONY_PORT=8080`
 
 Fresh workspaces created from the checked-in Elixir workflow also install a
-direct `context-pruner` CLI for focused `read`, `grep`, and `bash` flows. See
+remote-model-backed `context-pruner lookup` CLI for repository context
+discovery. See
 [elixir/docs/context_pruner.md](elixir/docs/context_pruner.md).
 
 ---

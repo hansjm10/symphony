@@ -21,7 +21,7 @@ The IDL-1147 benchmark keeps the layers explicit:
 - Layer 1: remote-pruner savings on the submitted payload itself
 - Layer 2: optional downstream Codex thread-total impact when the pruned payload is supplied to a full run
 
-For Layer 1, local `context-pruner read` and `context-pruner grep` commands are only input producers. The remote benchmark target is the live `PRUNER_URL` transformation applied to the same `{ code, query }` payload.
+For Layer 1, the supported `context-pruner lookup` flow is only a bounded input producer. The remote benchmark target is the live `PRUNER_URL` transformation applied to the same `{ code, query }` payload.
 
 ## Current Takeaways
 

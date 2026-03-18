@@ -46,7 +46,7 @@ defmodule ContextPrunerTokenSavingsMeasurement do
         "endpoint" => pruner_url,
         "requestShape" => %{"code" => "...", "query" => "..."},
         "producerNote" =>
-          "Local `context-pruner read` and `context-pruner grep` commands only produced the submitted payloads. The benchmark target is the remote transformation applied to the same `{code, query}` input.",
+          "The supported CLI surface is `context-pruner lookup`; these benchmark cases use bounded lookup sources only to produce the submitted payload before the remote `{code, query}` transformation.",
         "prunerConfigWarnings" => pruner_warnings
       },
       "artifacts" => %{
@@ -83,7 +83,9 @@ defmodule ContextPrunerTokenSavingsMeasurement do
         label: "Small env-contract file window",
         query: "Keep only the env contract and alias behavior.",
         producer_args: [
-          "read",
+          "lookup",
+          "--query",
+          "Keep only the env contract and alias behavior.",
           "--file-path",
           "elixir/docs/context_pruner.md",
           "--around-line",
@@ -99,7 +101,9 @@ defmodule ContextPrunerTokenSavingsMeasurement do
         label: "Broader contract section file window",
         query: "Keep only the env contract, compatibility alias, request body, and primary response field.",
         producer_args: [
-          "read",
+          "lookup",
+          "--query",
+          "Keep only the env contract, compatibility alias, request body, and primary response field.",
           "--file-path",
           "elixir/docs/context_pruner.md",
           "--start-line",
@@ -115,7 +119,9 @@ defmodule ContextPrunerTokenSavingsMeasurement do
         label: "Already-clustered metadata grep",
         query: "Keep only the remote verification metadata and what it proved.",
         producer_args: [
-          "grep",
+          "lookup",
+          "--query",
+          "Keep only the remote verification metadata and what it proved.",
           "--pattern",
           "origin_token_cnt|left_token_cnt|model_input_token_cnt|pruned_code|JEEVES_PRUNER_URL|PRUNER_URL",
           "--path",
@@ -133,7 +139,9 @@ defmodule ContextPrunerTokenSavingsMeasurement do
         label: "Docs-only remote-contract grep",
         query: "Keep only the remote request shape and primary response field.",
         producer_args: [
-          "grep",
+          "lookup",
+          "--query",
+          "Keep only the remote request shape and primary response field.",
           "--pattern",
           "PRUNER_URL|JEEVES_PRUNER_URL|pruned_code|request body|query|token_scores|kept_frags",
           "--path",
@@ -188,9 +196,16 @@ defmodule ContextPrunerTokenSavingsMeasurement do
 
   defp measure_remote_case(pruner_url, repo_root, benchmark_case) do
     producer_result =
-      with_temporary_env(%{"CONTEXT_PRUNER_CWD" => repo_root}, fn ->
-        CLI.evaluate(benchmark_case.producer_args)
-      end)
+      with_temporary_env(
+        %{
+          "CONTEXT_PRUNER_CWD" => repo_root,
+          "JEEVES_PRUNER_URL" => nil,
+          "PRUNER_URL" => nil
+        },
+        fn ->
+          CLI.evaluate(benchmark_case.producer_args)
+        end
+      )
 
     if producer_result.exit_code != 0 do
       raise "Producer command failed for #{benchmark_case.id}: #{producer_result.stderr}"
@@ -467,7 +482,7 @@ defmodule ContextPrunerTokenSavingsMeasurement do
       "## Observations\n\n",
       "- Meaningful reduction (`>=20%` token savings in the remote metadata) appeared in: `#{Enum.join(meaningful_ids, "`, `")}`.\n",
       "- Low or no reduction appeared in: `#{Enum.join(low_or_no_ids, "`, `")}`.\n",
-      "- The deciding factor was not whether the producer was `read` or `grep`; it was how much extra surrounding context still survived in the submitted payload before the remote prune step.\n",
+      "- The deciding factor was not which bounded lookup source was used; it was how much extra surrounding context still survived in the submitted payload before the remote prune step.\n",
       "- Already-narrow inputs often came back unchanged, while broader mixed sections or cross-file grep sweeps were where the remote model removed the most text.\n\n",
       "## Case Details\n\n",
       Enum.map_join(remote_cases, "\n", &render_remote_case_details/1),

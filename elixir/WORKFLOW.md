@@ -92,16 +92,21 @@ Instructions:
 
 ## Context discovery and reads
 
-- `context-pruner` is the local CLI for bounded file reads, targeted grep, and optional prune-focused shell capture. Prefer it before broad `cat`, `sed`, `rg`, or ad hoc shell output when you need repository context.
+- `context-pruner` is the remote-model-backed context lookup CLI. When the agent is trying to find repository context, it must start with `context-pruner lookup` before any broad `cat`, `sed`, `rg`, or ad hoc shell output.
 - The CLI shape was adapted from prior Jeeves work. For reuse-first background, see `/work/jeeves/docs/mcp-pruner-cli-report.md` and `/work/jeeves/packages/mcp-pruner/`.
-- Open `.codex/skills/context-pruner/SKILL.md` before discovery work when the skill is available, and follow its command surface and fallback guidance.
-- Start with the narrowest command that can answer the question:
-  - `context-pruner read --file-path <path> --start-line <n> --end-line <n>` or `--around-line <n> --radius <n>` for known files.
-  - `context-pruner grep --pattern <regex> --path <path> --context-lines <n> --max-matches <n>` for bounded search.
-  - `context-pruner bash --command "<command>"` only when the answer must come from shell output rather than directly from files.
-- Add `--focus` only after the file window, search path, and match counts are already narrow enough that pruning has a clear target.
+- Open `.codex/skills/context-pruner/SKILL.md` before discovery work when the skill is available, and follow its required lookup-first guidance.
+- Start with the narrowest lookup source that can answer the question:
+  - `context-pruner lookup --query "<goal>" --file-path <path> --start-line <n> --end-line <n>` or `--around-line <n> --radius <n>` for known files.
+  - `context-pruner lookup --query "<goal>" --pattern <regex> --path <path> --context-lines <n> --max-matches <n>` for bounded search.
+  - `context-pruner lookup --query "<goal>" --command "<command>"` only when the answer must come from shell output rather than directly from files.
+- Phrase `--query` as the exact retention goal for the remote pruner:
+  - broader mixed file window -> `Keep exactly the statements that define ...`
+  - grep-style clustered output -> `Which lines are relevant to ...?`
+  - ultra-narrow fact lookup -> `Extract only the minimum text needed to answer ...`
+  - avoid negative-only phrasing like `Drop examples, framing, and unrelated lines.`
+  - avoid line-number-only phrasing like `Return only lines 49, 54, 67, and 68.`
 - Keep Symphony env-driven: prefer `PRUNER_URL`; use `JEEVES_PRUNER_URL` only as a compatibility alias when `PRUNER_URL` is unset. The current remote verification target referenced in `/work/jeeves/.env` is `http://192.168.1.15:8000/prune`, but do not hardcode it or assume it must be configured.
-- Fall back to bounded raw reads only when `context-pruner` is unavailable, cannot express the query, or you need exact raw bytes or interactive output. Use tight fallbacks such as `sed -n '120,160p' path`, `rg -n "pattern" path`, or a small shell command. Avoid full-file reads or unbounded repo sweeps unless no narrower option exists.
+- Fall back to bounded raw reads only when `context-pruner` is unavailable, the remote pruner is unavailable and you need exact raw bytes, the lookup cannot express the request, or you need interactive output. Use tight fallbacks such as `sed -n '120,160p' path`, `rg -n "pattern" path`, or a small shell command. Avoid full-file reads or unbounded repo sweeps unless no narrower alternative exists.
 
 ## Default posture
 
@@ -120,7 +125,7 @@ Instructions:
 
 ## Related skills
 
-- `context-pruner`: use `.codex/skills/context-pruner/SKILL.md` for bounded discovery and focused raw-read fallbacks.
+- `context-pruner`: use `.codex/skills/context-pruner/SKILL.md` for lookup-first context discovery and exception-only raw-read fallbacks.
 - `linear`: interact with Linear.
 - `pull`: keep the branch updated with latest `origin/main` before handoff-sensitive work.
 - `commit`: produce clean, logical commits during implementation.
