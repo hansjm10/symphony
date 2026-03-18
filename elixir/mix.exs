@@ -14,6 +14,8 @@ defmodule SymphonyElixir.MixProject do
         ],
         ignore_modules: [
           SymphonyElixir.Config,
+          SymphonyElixir.ContextPruner.CLI,
+          SymphonyElixir.ContextPruner.Pruner,
           SymphonyElixir.Linear.Client,
           SymphonyElixir.SpecsCheck,
           SymphonyElixir.Orchestrator,
