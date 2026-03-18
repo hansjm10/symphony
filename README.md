@@ -41,6 +41,18 @@ from the repository root with:
 ./run-symphony.sh
 ```
 
+On Windows PowerShell, use:
+
+```powershell
+.\run-symphony.ps1
+```
+
+Or from `cmd.exe`:
+
+```bat
+run-symphony.cmd
+```
+
 The launcher defaults to:
 - `SYMPHONY_DIR=./elixir`
 - `WORKFLOW_FILE=./elixir/WORKFLOW.md`
