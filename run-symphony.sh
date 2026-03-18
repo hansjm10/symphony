@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYMPHONY_DIR="${SYMPHONY_DIR:-$ROOT_DIR/elixir}"
 MISE_BIN="${MISE_BIN:-$(command -v mise || true)}"
 PORT="${SYMPHONY_PORT:-8080}"
+HOST="${SYMPHONY_HOST:-0.0.0.0}"
 WORKFLOW_FILE="${WORKFLOW_FILE:-$SYMPHONY_DIR/WORKFLOW.md}"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 
@@ -39,4 +40,5 @@ cd "$SYMPHONY_DIR"
 exec "$MISE_BIN" exec -- ./bin/symphony \
   --i-understand-that-this-will-be-running-without-the-usual-guardrails \
   --port "$PORT" \
+  --host "$HOST" \
   "$WORKFLOW_FILE"
