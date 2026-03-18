@@ -9,6 +9,7 @@ defmodule SymphonyElixir.ContextPruner.CLI do
   """
 
   alias SymphonyElixir.ContextPruner.{Pruner, Scope}
+  alias SymphonyElixir.HostShell
 
   @default_max_matches 200
   @default_radius 20
@@ -384,9 +385,9 @@ defmodule SymphonyElixir.ContextPruner.CLI do
         }
 
       false ->
-        with {:ok, shell} <- resolve_shell(),
+        with {:ok, shell} <- HostShell.resolve_local(),
              {:ok, stdout, stderr, exit_code} <- run_shell_command(shell, command) do
-          rendered_output = format_bash_output(stdout, stderr, exit_code)
+          rendered_output = format_command_output(stdout, stderr, exit_code)
 
           {pruned_output, warnings} =
             case rendered_output do
@@ -402,16 +403,6 @@ defmodule SymphonyElixir.ContextPruner.CLI do
     end
   end
 
-  defp resolve_shell do
-    case System.find_executable("bash") || System.find_executable("sh") do
-      nil ->
-        {:error, "No usable shell was found on this host.", 127}
-
-      shell ->
-        {:ok, shell}
-    end
-  end
-
   defp run_shell_command(shell, command) do
     stderr_path =
       Path.join(
@@ -419,11 +410,13 @@ defmodule SymphonyElixir.ContextPruner.CLI do
         "context-pruner-stderr-#{System.unique_integer([:positive])}"
       )
 
-    wrapped_command = "( #{command} ) 2>#{shell_escape(stderr_path)}"
+    wrapped_command = HostShell.stderr_redirect_command(shell, command, stderr_path)
     File.write!(stderr_path, "")
 
     try do
-      {stdout, exit_code} = System.cmd(shell, ["-lc", wrapped_command], cd: current_working_directory())
+      {stdout, exit_code} =
+        System.cmd(shell.executable, shell.args_prefix ++ [wrapped_command], cd: current_working_directory())
+
       stderr = read_temp_output(stderr_path)
       {:ok, stdout, stderr, exit_code}
     rescue
@@ -434,7 +427,7 @@ defmodule SymphonyElixir.ContextPruner.CLI do
     end
   end
 
-  defp format_bash_output(stdout, stderr, exit_code) do
+  defp format_command_output(stdout, stderr, exit_code) do
     parts =
       []
       |> maybe_append(stdout != "", stdout)
@@ -770,10 +763,6 @@ defmodule SymphonyElixir.ContextPruner.CLI do
       "" -> File.cwd!()
       cwd -> cwd
     end
-  end
-
-  defp shell_escape(value) do
-    "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
   end
 
   defp invalid_arguments_message(positionals, invalid) do

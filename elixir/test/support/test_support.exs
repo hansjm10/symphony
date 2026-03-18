@@ -288,4 +288,21 @@ defmodule SymphonyElixir.TestSupport do
 
     "  #{name}: |\n#{indented}"
   end
+
+  defp hook_entry(name, commands) when is_map(commands) do
+    rendered_commands =
+      commands
+      |> Enum.sort_by(fn {shell_name, _shell_command} -> to_string(shell_name) end)
+      |> Enum.map(fn {shell_name, shell_command} ->
+        indented =
+          shell_command
+          |> String.split("\n")
+          |> Enum.map_join("\n", &("      " <> &1))
+
+        "    #{shell_name}: |\n#{indented}"
+      end)
+      |> Enum.join("\n")
+
+    "  #{name}:\n#{rendered_commands}"
+  end
 end

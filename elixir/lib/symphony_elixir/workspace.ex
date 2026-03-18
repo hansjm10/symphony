@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, PathSafety, SSH}
+  alias SymphonyElixir.{Config, HostShell, PathSafety, SSH}
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
 
@@ -258,31 +258,33 @@ defmodule SymphonyElixir.Workspace do
         :ok
 
       command ->
-        script =
-          [
-            remote_shell_assign("workspace", workspace),
-            "if [ -d \"$workspace\" ]; then",
-            "  cd \"$workspace\"",
-            "  #{command}",
-            "fi"
-          ]
-          |> Enum.join("\n")
+        with {:ok, remote_command} <- resolve_remote_hook_command(command, "before_remove") do
+          script =
+            [
+              remote_shell_assign("workspace", workspace),
+              "if [ -d \"$workspace\" ]; then",
+              "  cd \"$workspace\"",
+              "  #{remote_command}",
+              "fi"
+            ]
+            |> Enum.join("\n")
 
-        run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms)
-        |> case do
-          {:ok, {output, status}} ->
-            handle_hook_command_result(
-              {output, status},
-              workspace,
-              %{issue_id: nil, issue_identifier: Path.basename(workspace)},
-              "before_remove"
-            )
+          run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms)
+          |> case do
+            {:ok, {output, status}} ->
+              handle_hook_command_result(
+                {output, status},
+                workspace,
+                %{issue_id: nil, issue_identifier: Path.basename(workspace)},
+                "before_remove"
+              )
 
-          {:error, {:workspace_hook_timeout, "before_remove", _timeout_ms} = reason} ->
-            {:error, reason}
+            {:error, {:workspace_hook_timeout, "before_remove", _timeout_ms} = reason} ->
+              {:error, reason}
 
-          {:error, reason} ->
-            {:error, reason}
+            {:error, reason} ->
+              {:error, reason}
+          end
         end
         |> ignore_hook_failure()
     end
@@ -294,23 +296,28 @@ defmodule SymphonyElixir.Workspace do
   defp run_hook(command, workspace, issue_context, hook_name, nil) do
     timeout_ms = Config.settings!().hooks.timeout_ms
 
-    Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local")
+    with {:ok, shell, resolved_command} <- resolve_local_hook_command(command, hook_name) do
+      Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local shell=#{shell.command_name}")
 
-    task =
-      Task.async(fn ->
-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
-      end)
+      task =
+        Task.async(fn ->
+          System.cmd(shell.executable, shell.args_prefix ++ [resolved_command],
+            cd: workspace,
+            stderr_to_stdout: true
+          )
+        end)
 
-    case Task.yield(task, timeout_ms) do
-      {:ok, cmd_result} ->
-        handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
+      case Task.yield(task, timeout_ms) do
+        {:ok, cmd_result} ->
+          handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
-      nil ->
-        Task.shutdown(task, :brutal_kill)
+        nil ->
+          Task.shutdown(task, :brutal_kill)
 
-        Logger.warning("Workspace hook timed out hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local timeout_ms=#{timeout_ms}")
+          Logger.warning("Workspace hook timed out hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local timeout_ms=#{timeout_ms}")
 
-        {:error, {:workspace_hook_timeout, hook_name, timeout_ms}}
+          {:error, {:workspace_hook_timeout, hook_name, timeout_ms}}
+      end
     end
   end
 
@@ -319,17 +326,64 @@ defmodule SymphonyElixir.Workspace do
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=#{worker_host}")
 
-    case run_remote_command(worker_host, "cd #{shell_escape(workspace)} && #{command}", timeout_ms) do
-      {:ok, cmd_result} ->
-        handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
+    with {:ok, resolved_command} <- resolve_remote_hook_command(command, hook_name) do
+      case run_remote_command(worker_host, "cd #{shell_escape(workspace)} && #{resolved_command}", timeout_ms) do
+        {:ok, cmd_result} ->
+          handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
-      {:error, {:workspace_hook_timeout, ^hook_name, _timeout_ms} = reason} ->
-        {:error, reason}
+        {:error, {:workspace_hook_timeout, ^hook_name, _timeout_ms} = reason} ->
+          {:error, reason}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
+
+  defp resolve_local_hook_command(command, hook_name) when is_binary(command) do
+    case HostShell.resolve_local(family: :posix) do
+      {:ok, shell} ->
+        {:ok, shell, command}
+
+      {:error, _message, _status} ->
+        {:error, {:workspace_hook_shell_error, hook_name, "Legacy string hooks require a POSIX shell on this host. Define hooks.#{hook_name}.pwsh for native Windows support."}}
+    end
+  end
+
+  defp resolve_local_hook_command(command, hook_name) when is_map(command) do
+    family = HostShell.family()
+    shell_key = shell_family_key(family)
+    resolved_command = Map.get(command, shell_key) || Map.get(command, String.to_atom(shell_key))
+
+    cond do
+      is_nil(resolved_command) ->
+        {:error, {:workspace_hook_shell_error, hook_name, "Hook #{hook_name} does not define a #{shell_key} command for this host."}}
+
+      true ->
+        case HostShell.resolve_local(family: family) do
+          {:ok, shell} ->
+            {:ok, shell, resolved_command}
+
+          {:error, message, _status} ->
+            {:error, {:workspace_hook_shell_error, hook_name, message}}
+        end
+    end
+  end
+
+  defp resolve_remote_hook_command(command, _hook_name) when is_binary(command), do: {:ok, command}
+
+  defp resolve_remote_hook_command(command, hook_name) when is_map(command) do
+    case Map.get(command, "sh") || Map.get(command, :sh) do
+      nil ->
+        {:error, {:workspace_hook_shell_error, hook_name, "Hook #{hook_name} does not define a sh command for remote execution."}}
+
+      resolved_command ->
+        {:ok, resolved_command}
+    end
+  end
+
+  defp shell_family_key(:windows), do: "pwsh"
+  defp shell_family_key(:posix), do: "sh"
 
   defp handle_hook_command_result({_output, 0}, _workspace, _issue_id, _hook_name) do
     :ok

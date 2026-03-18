@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.ContextPruner.CodexBackend do
   @moduledoc false
 
+  alias SymphonyElixir.HostShell
+
   @default_env_passthrough [
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -99,26 +101,45 @@ defmodule SymphonyElixir.ContextPruner.CodexBackend do
     File.write!(schema_path, output_schema())
 
     try do
-      command = build_command(config, workspace_dir, home_dir, prompt_path, output_path, schema_path)
-      {combined_output, exit_code} = run_command(command, workspace_dir)
+      with {:ok, shell} <- HostShell.resolve_local() do
+        command =
+          build_command(
+            shell,
+            config,
+            workspace_dir,
+            home_dir,
+            prompt_path,
+            output_path,
+            schema_path
+          )
 
-      case {exit_code, read_output_file(output_path)} do
-        {0, {:ok, pruned_text}} ->
-          {pruned_text, []}
+        {combined_output, exit_code} = run_command(shell, command, workspace_dir)
 
-        {0, {:error, reason}} ->
+        case {exit_code, read_output_file(output_path)} do
+          {0, {:ok, pruned_text}} ->
+            {pruned_text, []}
+
+          {0, {:error, reason}} ->
+            {code,
+             [
+               "[context-pruner] Codex backend returned an invalid output payload (#{reason}); falling back to original content."
+             ]}
+
+          {status, _} ->
+            {code,
+             [
+               "[context-pruner] Codex backend exited with status #{status}; falling back to original content.",
+               format_combined_output(combined_output)
+             ]
+             |> Enum.reject(&(&1 == ""))}
+        end
+      else
+        {:error, message, status} ->
           {code,
            [
-             "[context-pruner] Codex backend returned an invalid output payload (#{reason}); falling back to original content."
+             "[context-pruner] Codex backend shell setup failed (#{message}); falling back to original content.",
+             "[context-pruner] Codex backend exited with status #{status}; falling back to original content."
            ]}
-
-        {status, _} ->
-          {code,
-           [
-             "[context-pruner] Codex backend exited with status #{status}; falling back to original content.",
-             format_combined_output(combined_output)
-           ]
-           |> Enum.reject(&(&1 == ""))}
       end
     rescue
       error in [File.Error] ->
@@ -131,46 +152,19 @@ defmodule SymphonyElixir.ContextPruner.CodexBackend do
     end
   end
 
-  defp build_command(config, workspace_dir, home_dir, prompt_path, output_path, schema_path) do
-    env_assignments = build_env_assignments(config, home_dir)
+  defp build_command(shell, config, workspace_dir, home_dir, prompt_path, output_path, schema_path) do
+    env_map = build_env_map(config, home_dir)
 
-    codex_args =
-      [
-        shell_escape(config.executable),
-        "exec",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "read-only",
-        "--color",
-        "never",
-        "--cd",
-        shell_escape(workspace_dir),
-        "--model",
-        shell_escape(config.model),
-        "-c",
-        shell_escape("model_reasoning_effort=#{config.reasoning_effort}"),
-        "--output-schema",
-        shell_escape(schema_path),
-        "-o",
-        shell_escape(output_path),
-        "-",
-        "<",
-        shell_escape(prompt_path)
-      ]
-      |> Enum.join(" ")
+    case shell.family do
+      :windows ->
+        build_windows_command(env_map, config, workspace_dir, prompt_path, output_path, schema_path)
 
-    [
-      timeout_prefix(config.timeout_ms),
-      "env -i",
-      env_assignments,
-      codex_args
-    ]
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join(" ")
+      :posix ->
+        build_posix_command(env_map, config, workspace_dir, prompt_path, output_path, schema_path)
+    end
   end
 
-  defp build_env_assignments(config, home_dir) do
+  defp build_env_map(config, home_dir) do
     base_env = %{
       "HOME" => home_dir,
       "PATH" => System.get_env("PATH") || "",
@@ -189,13 +183,93 @@ defmodule SymphonyElixir.ContextPruner.CodexBackend do
       end)
 
     Map.merge(base_env, passthrough_env)
-    |> Enum.map_join(" ", fn {key, value} ->
-      "#{key}=#{shell_escape(value)}"
-    end)
   end
 
-  defp run_command(command, workspace_dir) do
-    System.cmd("bash", ["-lc", command],
+  defp build_posix_command(env_map, config, workspace_dir, prompt_path, output_path, schema_path) do
+    env_assignments =
+      Enum.map_join(env_map, " ", fn {key, value} ->
+        "#{key}=#{HostShell.posix_escape(value)}"
+      end)
+
+    codex_args =
+      [
+        HostShell.posix_escape(config.executable),
+        "exec",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "read-only",
+        "--color",
+        "never",
+        "--cd",
+        HostShell.posix_escape(workspace_dir),
+        "--model",
+        HostShell.posix_escape(config.model),
+        "-c",
+        HostShell.posix_escape("model_reasoning_effort=#{config.reasoning_effort}"),
+        "--output-schema",
+        HostShell.posix_escape(schema_path),
+        "-o",
+        HostShell.posix_escape(output_path),
+        "-",
+        "<",
+        HostShell.posix_escape(prompt_path)
+      ]
+      |> Enum.join(" ")
+
+    [
+      timeout_prefix(config.timeout_ms),
+      "env -i",
+      env_assignments,
+      codex_args
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join(" ")
+  end
+
+  defp build_windows_command(env_map, config, workspace_dir, prompt_path, output_path, schema_path) do
+    clear_env =
+      "Get-ChildItem Env: | ForEach-Object { Remove-Item -Path (\"Env:\" + $_.Name) -ErrorAction SilentlyContinue }"
+
+    set_env =
+      Enum.map_join(env_map, "; ", fn {key, value} ->
+        "$env:#{key}=#{HostShell.powershell_escape(value)}"
+      end)
+
+    codex_args =
+      [
+        "&",
+        HostShell.powershell_escape(config.executable),
+        "exec",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "read-only",
+        "--color",
+        "never",
+        "--cd",
+        HostShell.powershell_escape(workspace_dir),
+        "--model",
+        HostShell.powershell_escape(config.model),
+        "-c",
+        HostShell.powershell_escape("model_reasoning_effort=#{config.reasoning_effort}"),
+        "--output-schema",
+        HostShell.powershell_escape(schema_path),
+        "-o",
+        HostShell.powershell_escape(output_path),
+        "-"
+      ]
+      |> Enum.join(" ")
+
+    input_redirect = "Get-Content -Raw #{HostShell.powershell_escape(prompt_path)} | #{codex_args}"
+
+    [clear_env, set_env, input_redirect]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("; ")
+  end
+
+  defp run_command(shell, command, workspace_dir) do
+    System.cmd(shell.executable, shell.args_prefix ++ [command],
       cd: workspace_dir,
       stderr_to_stdout: true
     )
@@ -254,7 +328,7 @@ defmodule SymphonyElixir.ContextPruner.CodexBackend do
 
       timeout_bin ->
         seconds = Float.round(timeout_ms / 1_000, 3)
-        "#{shell_escape(timeout_bin)} --signal=TERM --kill-after=#{@default_timeout_kill_after} #{seconds}s"
+        "#{HostShell.posix_escape(timeout_bin)} --signal=TERM --kill-after=#{@default_timeout_kill_after} #{seconds}s"
     end
   end
 
@@ -356,9 +430,5 @@ defmodule SymphonyElixir.ContextPruner.CodexBackend do
     auth_target = Path.join([home_dir, ".codex", "auth.json"])
     File.cp!(auth_file, auth_target)
     File.chmod!(auth_target, 0o600)
-  end
-
-  defp shell_escape(value) do
-    "'" <> String.replace(to_string(value), "'", "'\"'\"'") <> "'"
   end
 end

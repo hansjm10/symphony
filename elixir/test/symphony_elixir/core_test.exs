@@ -105,11 +105,13 @@ defmodule SymphonyElixir.CoreTest do
 
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
-    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 https://github.com/hansjm10/symphony ."
-    assert Map.get(hooks, "after_create") =~ "cp context-pruner \"$HOME/.local/bin/context-pruner\""
-    assert Map.get(hooks, "after_create") =~ "cd elixir && mise trust"
-    assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
-    assert Map.get(hooks, "before_remove") =~ "cd elixir && mise exec -- mix workspace.before_remove"
+    assert is_map(Map.get(hooks, "after_create"))
+    assert Map.get(hooks, "after_create") |> Map.get("sh") =~ "git clone --depth 1 https://github.com/hansjm10/symphony ."
+    assert Map.get(hooks, "after_create") |> Map.get("sh") =~ "cp context-pruner \"$HOME/.local/bin/context-pruner\""
+    assert Map.get(hooks, "after_create") |> Map.get("pwsh") =~ "Copy-Item context-pruner.ps1"
+    assert Map.get(hooks, "after_create") |> Map.get("pwsh") =~ "mise exec -- mix deps.get"
+    assert Map.get(hooks, "before_remove") |> Map.get("sh") =~ "cd elixir && mise exec -- mix workspace.before_remove"
+    assert Map.get(hooks, "before_remove") |> Map.get("pwsh") =~ "mix workspace.before_remove"
 
     assert Map.get(config, "codex", %{}) |> Map.get("command") =~
              "PATH=\"$HOME/.local/bin:$PATH\" codex"

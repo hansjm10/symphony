@@ -10,6 +10,12 @@ isolated so it does not inherit hidden parent context.
 The supported interface is `context-pruner lookup`. Direct `read`, `grep`, and
 `bash` entrypoints remain deprecated compatibility shims only.
 
+The repository ships OS-native launchers for the CLI:
+
+- POSIX: `./context-pruner`
+- PowerShell: `./context-pruner.ps1`
+- `cmd.exe`: `./context-pruner.cmd`
+
 ## Lookup posture
 
 - start with `context-pruner lookup` before broad `cat`, `sed`, `rg`, or ad hoc
@@ -118,6 +124,8 @@ Notes:
 
 - use `--command` only when the answer must come from shell output rather than
   directly from files
+- `lookup --command` uses a native local shell for the current host: `pwsh` /
+  `powershell` on Windows, `bash` / `sh` on POSIX
 - `--command` is valid only for non-Codex backends; the Codex backend rejects
   it
 - `--focus` remains a deprecated compatibility alias for `--query`

@@ -17,7 +17,8 @@ description:
   before broad `cat`, `sed`, `rg`, or ad hoc shell output.
 - In fresh Symphony workspaces the launcher should be on `PATH` as
   `context-pruner`. In a repo checkout you can also invoke `./context-pruner`
-  from the repo root.
+  on POSIX or `./context-pruner.ps1` / `./context-pruner.cmd` on Windows from
+  the repo root.
 
 Implementation locations:
 

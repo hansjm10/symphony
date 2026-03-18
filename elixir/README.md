@@ -126,9 +126,9 @@ Notes:
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
-- The checked-in workflow also copies the repo's `context-pruner` launcher into `~/.local/bin` and
-  prepends that directory to the Codex PATH, so fresh workspaces can call `context-pruner`
-  directly.
+- The checked-in workflow installs the repo's `context-pruner` launcher with OS-specific hook
+  entries: POSIX workspaces install the root `context-pruner` script, while Windows workspaces
+  install `context-pruner.ps1` and `context-pruner.cmd`.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
@@ -162,6 +162,12 @@ codex:
 Fresh workspaces can use `context-pruner lookup` directly for remote-model-backed
 repository context discovery from bounded file windows, scoped search results,
 or exception-only shell capture.
+
+The repo ships native launcher entrypoints for each host shell:
+
+- POSIX: `./context-pruner`
+- PowerShell: `./context-pruner.ps1`
+- `cmd.exe`: `./context-pruner.cmd`
 
 The default backend is the remote `{ code, query }` pruner configured by
 `PRUNER_URL`. `CONTEXT_PRUNER_BACKEND=codex` switches lookup to a blank-state

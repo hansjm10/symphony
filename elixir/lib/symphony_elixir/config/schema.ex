@@ -204,12 +204,14 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    alias SymphonyElixir.Config.Schema.StringOrMap
+
     @primary_key false
     embedded_schema do
-      field(:after_create, :string)
-      field(:before_run, :string)
-      field(:after_run, :string)
-      field(:before_remove, :string)
+      field(:after_create, StringOrMap)
+      field(:before_run, StringOrMap)
+      field(:after_run, StringOrMap)
+      field(:before_remove, StringOrMap)
       field(:timeout_ms, :integer, default: 60_000)
     end
 
@@ -217,8 +219,47 @@ defmodule SymphonyElixir.Config.Schema do
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, [:after_create, :before_run, :after_run, :before_remove, :timeout_ms], empty_values: [])
+      |> validate_hook_command(:after_create)
+      |> validate_hook_command(:before_run)
+      |> validate_hook_command(:after_run)
+      |> validate_hook_command(:before_remove)
       |> validate_number(:timeout_ms, greater_than: 0)
     end
+
+    defp validate_hook_command(changeset, field) do
+      validate_change(changeset, field, fn ^field, value ->
+        validate_hook_command_value(field, value)
+      end)
+    end
+
+    defp validate_hook_command_value(_field, nil), do: []
+    defp validate_hook_command_value(_field, value) when is_binary(value), do: []
+
+    defp validate_hook_command_value(field, value) when is_map(value) do
+      normalized_map =
+        Map.new(value, fn {key, command_value} ->
+          {to_string(key), command_value}
+        end)
+
+      invalid_keys =
+        normalized_map
+        |> Map.keys()
+        |> Enum.reject(&(&1 in ["pwsh", "sh"]))
+        |> Enum.sort()
+
+      cond do
+        invalid_keys != [] ->
+          [{field, "must only contain sh and pwsh keys"}]
+
+        Enum.any?(normalized_map, fn {_key, command_value} -> not is_binary(command_value) end) ->
+          [{field, "must contain string shell commands"}]
+
+        true ->
+          []
+      end
+    end
+
+    defp validate_hook_command_value(field, _value), do: [{field, "must be a string or shell map"}]
   end
 
   defmodule Observability do

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.ContextPruner.CLITest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.ContextPruner.CLI
+  alias SymphonyElixir.{ContextPruner.CLI, HostShell}
 
   setup do
     temp_dir =
@@ -99,7 +99,14 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
   end
 
   test "lookup command mode returns stdout for successful commands" do
-    result = CLI.evaluate(["lookup", "--query", "Keep alpha.", "--command", "printf 'alpha'"])
+    result =
+      CLI.evaluate([
+        "lookup",
+        "--query",
+        "Keep alpha.",
+        "--command",
+        successful_command()
+      ])
 
     assert result.exit_code == 0
     assert result.stderr == ""
@@ -113,13 +120,14 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
         "--query",
         "Summarize the command output.",
         "--command",
-        "printf 'alpha'; printf 'beta' >&2; exit 7"
+        stderr_and_exit_command()
       ])
 
     assert result.exit_code == 7
     assert result.stderr == ""
     assert result.stdout =~ "alpha"
-    assert result.stdout =~ "[stderr]\nbeta"
+    assert result.stdout =~ "[stderr]"
+    assert result.stdout =~ "beta"
     assert result.stdout =~ "[exit code: 7]"
   end
 
@@ -253,7 +261,7 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
           "--query",
           "Where is alpha?",
           "--command",
-          "printf 'alpha'"
+          successful_command()
         ])
 
       assert result.exit_code == 0
@@ -491,54 +499,115 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
       )
 
     File.mkdir_p!(test_root)
-    codex_bin = Path.join(test_root, "fake-codex")
+    codex_bin = fake_codex_path(test_root)
     trace_file = Path.join(test_root, "trace.txt")
 
-    File.write!(codex_bin, """
-    #!/bin/sh
-    trace_file="#{trace_file}"
-    all_args="$*"
-    output_path=""
-
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        -o|--output-last-message)
-          output_path="$2"
-          shift 2
-          ;;
-        --output-schema)
-          shift 2
-          ;;
-        *)
-          shift
-          ;;
-      esac
-    done
-
-    prompt="$(cat)"
-
-    {
-      printf 'PWD=%s\\n' "$(pwd)"
-      printf 'HOME=%s\\n' "${HOME:-}"
-      printf 'CODEX_SESSION_ID=%s\\n' "${CODEX_SESSION_ID:-}"
-      printf 'CONTEXT_PRUNER_CWD=%s\\n' "${CONTEXT_PRUNER_CWD:-}"
-      if [ -f "$HOME/.codex/auth.json" ]; then auth_present=yes; else auth_present=no; fi
-      if [ -d "$HOME/.codex/sessions" ]; then sessions_present=yes; else sessions_present=no; fi
-      printf 'AUTH_FILE_PRESENT=%s\\n' "$auth_present"
-      printf 'SESSIONS_DIR_PRESENT=%s\\n' "$sessions_present"
-      printf 'ARGS=%s\\n' "$all_args"
-      printf 'PROMPT<<EOF\\n%s\\nEOF\\n' "$prompt"
-    } > "$trace_file"
-
-    printf '%s' '{"pruned_text":"function beta() {}"}' > "$output_path"
-    """)
-
-    File.chmod!(codex_bin, 0o755)
+    write_fake_codex!(codex_bin, trace_file)
 
     try do
       fun.(codex_bin, trace_file)
     after
       File.rm_rf(test_root)
+    end
+  end
+
+  defp successful_command do
+    case HostShell.family() do
+      :windows -> "[Console]::Write('alpha')"
+      :posix -> "printf 'alpha'"
+    end
+  end
+
+  defp stderr_and_exit_command do
+    case HostShell.family() do
+      :windows -> "[Console]::Write('alpha'); Write-Error 'beta'; exit 7"
+      :posix -> "printf 'alpha'; printf 'beta' >&2; exit 7"
+    end
+  end
+
+  defp fake_codex_path(test_root) do
+    case HostShell.family() do
+      :windows -> Path.join(test_root, "fake-codex.ps1")
+      :posix -> Path.join(test_root, "fake-codex")
+    end
+  end
+
+  defp write_fake_codex!(codex_bin, trace_file) do
+    case HostShell.family() do
+      :windows ->
+        File.write!(codex_bin, """
+        $traceFile = '#{trace_file}'
+        $outputPath = ''
+
+        for ($i = 0; $i -lt $args.Length; $i++) {
+          switch ($args[$i]) {
+            '-o' { $outputPath = $args[$i + 1]; $i++; continue }
+            '--output-last-message' { $outputPath = $args[$i + 1]; $i++; continue }
+            '--output-schema' { $i++; continue }
+          }
+        }
+
+        $prompt = ($input | Out-String).TrimEnd("`r", "`n")
+        $authPresent = if (Test-Path (Join-Path $env:HOME '.codex/auth.json')) { 'yes' } else { 'no' }
+        $sessionsPresent = if (Test-Path (Join-Path $env:HOME '.codex/sessions')) { 'yes' } else { 'no' }
+
+        @(
+          "PWD=$((Get-Location).Path)"
+          "HOME=$env:HOME"
+          "CODEX_SESSION_ID=$env:CODEX_SESSION_ID"
+          "CONTEXT_PRUNER_CWD=$env:CONTEXT_PRUNER_CWD"
+          "AUTH_FILE_PRESENT=$authPresent"
+          "SESSIONS_DIR_PRESENT=$sessionsPresent"
+          "ARGS=$($args -join ' ')"
+          "PROMPT<<EOF"
+          $prompt
+          "EOF"
+        ) | Set-Content -Path $traceFile
+
+        '{"pruned_text":"function beta() {}"}' | Set-Content -NoNewline -Path $outputPath
+        """)
+
+      :posix ->
+        File.write!(codex_bin, """
+        #!/bin/sh
+        trace_file="#{trace_file}"
+        all_args="$*"
+        output_path=""
+
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            -o|--output-last-message)
+              output_path="$2"
+              shift 2
+              ;;
+            --output-schema)
+              shift 2
+              ;;
+            *)
+              shift
+              ;;
+          esac
+        done
+
+        prompt="$(cat)"
+
+        {
+          printf 'PWD=%s\\n' "$(pwd)"
+          printf 'HOME=%s\\n' "${HOME:-}"
+          printf 'CODEX_SESSION_ID=%s\\n' "${CODEX_SESSION_ID:-}"
+          printf 'CONTEXT_PRUNER_CWD=%s\\n' "${CONTEXT_PRUNER_CWD:-}"
+          if [ -f "$HOME/.codex/auth.json" ]; then auth_present=yes; else auth_present=no; fi
+          if [ -d "$HOME/.codex/sessions" ]; then sessions_present=yes; else sessions_present=no; fi
+          printf 'AUTH_FILE_PRESENT=%s\\n' "$auth_present"
+          printf 'SESSIONS_DIR_PRESENT=%s\\n' "$sessions_present"
+          printf 'ARGS=%s\\n' "$all_args"
+          printf 'PROMPT<<EOF\\n%s\\nEOF\\n' "$prompt"
+        } > "$trace_file"
+
+        printf '%s' '{"pruned_text":"function beta() {}"}' > "$output_path"
+        """)
+
+        File.chmod!(codex_bin, 0o755)
     end
   end
 end

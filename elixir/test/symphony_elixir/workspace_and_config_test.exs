@@ -3,7 +3,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   alias Ecto.Changeset
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.{Codex, StringOrMap}
-  alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.{HostShell, Linear.Client}
 
   test "workspace bootstrap can be implemented in after_create hook" do
     test_root =
@@ -603,29 +603,86 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     try do
       workspace_root = Path.join(test_root, "workspaces")
-      before_remove_marker = Path.join(test_root, "before_remove.log")
-      after_create_counter = Path.join(test_root, "after_create.count")
 
       File.mkdir_p!(workspace_root)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "echo after_create > after_create.log\necho call >> \"#{after_create_counter}\"",
-        hook_before_remove: "echo before_remove > \"#{before_remove_marker}\""
+        hook_after_create: "echo after_create > after_create.log\necho call >> after_create.count"
       )
 
       config = Config.settings!()
       assert config.hooks.after_create =~ "echo after_create > after_create.log"
-      assert config.hooks.before_remove =~ "echo before_remove >"
 
       assert {:ok, workspace} = Workspace.create_for_issue("MT-HOOKS")
       assert File.read!(Path.join(workspace, "after_create.log")) == "after_create\n"
+      assert File.read!(Path.join(workspace, "after_create.count")) == "call\n"
 
       assert {:ok, _workspace} = Workspace.create_for_issue("MT-HOOKS")
-      assert length(String.split(String.trim(File.read!(after_create_counter)), "\n")) == 1
+      assert length(String.split(String.trim(File.read!(Path.join(workspace, "after_create.count"))), "\n")) == 1
 
       assert :ok = Workspace.remove_issue_workspaces("MT-HOOKS")
-      assert File.read!(before_remove_marker) == "before_remove\n"
+      refute File.exists?(workspace)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "workspace hooks can use shell-specific command maps" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-shell-hooks-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      before_remove_marker = Path.join(test_root, "before_remove_shell.log")
+
+      File.mkdir_p!(workspace_root)
+
+      {after_create_command, before_remove_command} =
+        case HostShell.family() do
+          :posix ->
+            {
+              %{
+                "sh" => "echo after_create > after_create.log",
+                "pwsh" => "Set-Content -Path after_create.log -Value after_create"
+              },
+              %{
+                "sh" => "echo before_remove > \"#{before_remove_marker}\"",
+                "pwsh" => "Set-Content -Path '#{before_remove_marker}' -Value before_remove"
+              }
+            }
+
+          :windows ->
+            {
+              %{
+                "sh" => "echo after_create > after_create.log",
+                "pwsh" => "Set-Content -Path after_create.log -Value after_create"
+              },
+              %{
+                "sh" => "echo before_remove > \"#{before_remove_marker}\"",
+                "pwsh" => "Set-Content -Path '#{before_remove_marker}' -Value before_remove"
+              }
+            }
+        end
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: after_create_command,
+        hook_before_remove: before_remove_command
+      )
+
+      config = Config.settings!()
+      assert is_map(config.hooks.after_create)
+      assert is_map(config.hooks.before_remove)
+
+      assert {:ok, workspace} = Workspace.create_for_issue("MT-SHELL-HOOKS")
+      assert String.trim(File.read!(Path.join(workspace, "after_create.log"))) == "after_create"
+
+      assert :ok = Workspace.remove_issue_workspaces("MT-SHELL-HOOKS")
+      assert String.trim(File.read!(before_remove_marker)) == "before_remove"
       refute File.exists?(workspace)
     after
       File.rm_rf(test_root)
@@ -999,6 +1056,21 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert {:ok, %{"a" => 1}} = StringOrMap.dump(%{"a" => 1})
     assert :error = StringOrMap.dump(123)
+
+    assert {:ok, settings} =
+             Schema.parse(%{
+               hooks: %{after_create: %{"sh" => "echo hi", "pwsh" => "Write-Output hi"}}
+             })
+
+    assert settings.hooks.after_create == %{"sh" => "echo hi", "pwsh" => "Write-Output hi"}
+
+    assert {:error, {:invalid_workflow_config, invalid_message}} =
+             Schema.parse(%{
+               hooks: %{after_create: %{"cmd" => "echo hi"}}
+             })
+
+    assert invalid_message =~ "after_create"
+    assert invalid_message =~ "sh and pwsh"
 
     assert Schema.normalize_state_limits(nil) == %{}
 

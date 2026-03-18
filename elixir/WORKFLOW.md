@@ -20,16 +20,46 @@ polling:
 workspace:
   root: ~/code/symphony-workspaces
 hooks:
-  after_create: |
-    git clone --depth 1 https://github.com/hansjm10/symphony .
-    mkdir -p "$HOME/.local/bin"
-    cp context-pruner "$HOME/.local/bin/context-pruner"
-    chmod 755 "$HOME/.local/bin/context-pruner"
-    if command -v mise >/dev/null 2>&1; then
-      cd elixir && mise trust && mise exec -- mix deps.get
-    fi
-  before_remove: |
-    cd elixir && mise exec -- mix workspace.before_remove
+  after_create:
+    sh: |
+      git clone --depth 1 https://github.com/hansjm10/symphony .
+      mkdir -p "$HOME/.local/bin"
+      cp context-pruner "$HOME/.local/bin/context-pruner"
+      chmod 755 "$HOME/.local/bin/context-pruner"
+      if command -v mise >/dev/null 2>&1; then
+        cd elixir && mise trust && mise exec -- mix deps.get
+      fi
+    pwsh: |
+      git clone --depth 1 https://github.com/hansjm10/symphony .
+      $binDir = Join-Path $HOME ".local\bin"
+      New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+      Copy-Item context-pruner.ps1 (Join-Path $binDir "context-pruner.ps1")
+      Copy-Item context-pruner.cmd (Join-Path $binDir "context-pruner.cmd")
+      Push-Location elixir
+      try {
+        if (Get-Command mise -ErrorAction SilentlyContinue) {
+          mise trust
+          mise exec -- mix deps.get
+        } elseif (Get-Command mix -ErrorAction SilentlyContinue) {
+          mix deps.get
+        }
+      } finally {
+        Pop-Location
+      }
+  before_remove:
+    sh: |
+      cd elixir && mise exec -- mix workspace.before_remove
+    pwsh: |
+      Push-Location elixir
+      try {
+        if (Get-Command mise -ErrorAction SilentlyContinue) {
+          mise exec -- mix workspace.before_remove
+        } elseif (Get-Command mix -ErrorAction SilentlyContinue) {
+          mix workspace.before_remove
+        }
+      } finally {
+        Pop-Location
+      }
 agent:
   max_concurrent_agents: 10
   max_turns: 20

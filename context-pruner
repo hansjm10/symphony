@@ -38,6 +38,17 @@ fi
 SYMPHONY_DIR="$REPO_ROOT/elixir"
 MISE_BIN="${MISE_BIN:-$(command -v mise || true)}"
 MIX_BIN="${MIX_BIN:-$(command -v mix || true)}"
+PWSH_BIN="$(
+  command -v pwsh.exe 2>/dev/null ||
+  command -v pwsh 2>/dev/null ||
+  command -v powershell.exe 2>/dev/null ||
+  command -v powershell 2>/dev/null ||
+  { [[ -x "/mnt/c/Program Files/PowerShell/7/pwsh.exe" ]] && printf '%s\n' "/mnt/c/Program Files/PowerShell/7/pwsh.exe"; } ||
+  { [[ -x "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]] && printf '%s\n' "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"; } ||
+  { [[ -x "/c/Program Files/PowerShell/7/pwsh.exe" ]] && printf '%s\n' "/c/Program Files/PowerShell/7/pwsh.exe"; } ||
+  { [[ -x "/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]] && printf '%s\n' "/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"; } ||
+  true
+)"
 
 if [[ ! -f "$SYMPHONY_DIR/mix.exs" ]]; then
   echo "Symphony Elixir project not found under: $SYMPHONY_DIR" >&2
@@ -46,6 +57,16 @@ fi
 
 if [[ -z "$MISE_BIN" || ! -x "$MISE_BIN" ]]; then
   if [[ -z "$MIX_BIN" || ! -x "$MIX_BIN" ]]; then
+    if [[ -n "$PWSH_BIN" && -f "$REPO_ROOT/context-pruner.ps1" ]]; then
+      SCRIPT_PATH="$REPO_ROOT/context-pruner.ps1"
+
+      if command -v wslpath >/dev/null 2>&1; then
+        SCRIPT_PATH="$(wslpath -w "$SCRIPT_PATH")"
+      fi
+
+      exec "$PWSH_BIN" -NoProfile -ExecutionPolicy Bypass -File "$SCRIPT_PATH" "$@"
+    fi
+
     echo "Neither mise nor mix is available; cannot launch context-pruner." >&2
     exit 127
   fi
@@ -59,7 +80,7 @@ export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu}"
 cd "$SYMPHONY_DIR"
 
 if [[ -n "$MISE_BIN" && -x "$MISE_BIN" ]]; then
-  exec env MIX_QUIET=1 "$MISE_BIN" exec -- mix run --no-start -e 'SymphonyElixir.ContextPruner.CLI.main(System.argv())' -- "$@"
+  exec env MIX_QUIET=1 "$MISE_BIN" exec -- mix context_pruner "$@"
 fi
 
-exec env MIX_QUIET=1 "$MIX_BIN" run --no-start -e 'SymphonyElixir.ContextPruner.CLI.main(System.argv())' -- "$@"
+exec env MIX_QUIET=1 "$MIX_BIN" context_pruner "$@"
