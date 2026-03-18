@@ -53,22 +53,16 @@ defmodule SymphonyElixir.ContextPruner.CLI do
       ["help", subcommand] ->
         subcommand_help(subcommand)
 
-      ["lookup" | rest] ->
-        evaluate_lookup(rest)
-
-      ["read" | _rest] ->
-        deprecated_subcommand("read")
-
-      ["grep" | _rest] ->
-        deprecated_subcommand("grep")
-
-      ["bash" | _rest] ->
-        deprecated_subcommand("bash")
-
-      [subcommand | _rest] ->
-        usage_error("Unknown subcommand: #{subcommand}")
+      _ ->
+        evaluate_subcommand(argv)
     end
   end
+
+  defp evaluate_subcommand(["lookup" | rest]), do: evaluate_lookup(rest)
+  defp evaluate_subcommand(["read" | _rest]), do: deprecated_subcommand("read")
+  defp evaluate_subcommand(["grep" | _rest]), do: deprecated_subcommand("grep")
+  defp evaluate_subcommand(["bash" | _rest]), do: deprecated_subcommand("bash")
+  defp evaluate_subcommand([subcommand | _rest]), do: usage_error("Unknown subcommand: #{subcommand}")
 
   defp evaluate_lookup(argv) do
     {opts, positionals, invalid} =
@@ -558,14 +552,31 @@ defmodule SymphonyElixir.ContextPruner.CLI do
   end
 
   defp validate_lookup_selector_options(:grep, opts) do
-    with :ok <- reject_lookup_options(opts, [:file_path, :start_line, :end_line, :around_line, :radius, :command]),
-         :ok <- require_lookup_path(opts) do
-      :ok
+    case reject_lookup_options(opts, [
+           :file_path,
+           :start_line,
+           :end_line,
+           :around_line,
+           :radius,
+           :command
+         ]) do
+      :ok -> require_lookup_path(opts)
+      error -> error
     end
   end
 
   defp validate_lookup_selector_options(:bash, opts) do
-    reject_lookup_options(opts, [:file_path, :start_line, :end_line, :around_line, :radius, :pattern, :path, :context_lines, :max_matches])
+    reject_lookup_options(opts, [
+      :file_path,
+      :start_line,
+      :end_line,
+      :around_line,
+      :radius,
+      :pattern,
+      :path,
+      :context_lines,
+      :max_matches
+    ])
   end
 
   defp reject_lookup_options(opts, disallowed_keys) do
