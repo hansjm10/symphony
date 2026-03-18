@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.ContextPruner.Pruner do
   @moduledoc """
-  Shared prune-service client for the direct `context-pruner` CLI.
+  Shared prune-service client for the remote-model-backed `context-pruner`
+  lookup flow.
 
   This keeps Symphony's runtime contract intentionally small while preserving
   the request and response semantics already verified against the Jeeves

@@ -36,42 +36,62 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
     {:ok, temp_dir: temp_dir}
   end
 
-  test "read returns full file contents", %{temp_dir: temp_dir} do
+  test "lookup returns full file contents when PRUNER_URL is unset", %{temp_dir: temp_dir} do
     file_path = Path.join(temp_dir, "sample.txt")
     File.write!(file_path, "alpha\nbeta\n")
 
     assert %{exit_code: 0, stderr: "", stdout: "alpha\nbeta\n"} =
-             CLI.evaluate(["read", "--file-path", "sample.txt"])
+             CLI.evaluate(["lookup", "--query", "Where is beta?", "--file-path", "sample.txt"])
   end
 
-  test "read supports focused line windows", %{temp_dir: temp_dir} do
+  test "lookup supports focused file windows", %{temp_dir: temp_dir} do
     file_path = Path.join(temp_dir, "sample.txt")
     File.write!(file_path, "alpha\nbeta\ngamma\ndelta\n")
 
     assert %{exit_code: 0, stdout: "2: beta\n3: gamma\n"} =
-             CLI.evaluate(["read", "--file-path", file_path, "--start-line", "2", "--end-line", "3"])
+             CLI.evaluate([
+               "lookup",
+               "--query",
+               "Keep only the middle lines.",
+               "--file-path",
+               file_path,
+               "--start-line",
+               "2",
+               "--end-line",
+               "3"
+             ])
   end
 
-  test "read returns an error when the file is missing" do
-    result = CLI.evaluate(["read", "--file-path", "missing.txt"])
+  test "lookup requires a query" do
+    result = CLI.evaluate(["lookup", "--file-path", "sample.txt"])
+
+    assert result.exit_code == 2
+    assert result.stderr =~ "--query is required."
+    assert result.stdout == ""
+  end
+
+  test "lookup returns an error when the file is missing" do
+    result = CLI.evaluate(["lookup", "--query", "Read this file.", "--file-path", "missing.txt"])
 
     assert result.exit_code == 1
     assert result.stderr =~ "Error reading file:"
     assert result.stdout == ""
   end
 
-  test "bash returns stdout for successful commands" do
-    result = CLI.evaluate(["bash", "--command", "printf 'alpha'"])
+  test "lookup command mode returns stdout for successful commands" do
+    result = CLI.evaluate(["lookup", "--query", "Keep alpha.", "--command", "printf 'alpha'"])
 
     assert result.exit_code == 0
     assert result.stderr == ""
     assert result.stdout == "alpha"
   end
 
-  test "bash preserves stderr formatting and child exit codes" do
+  test "lookup command mode preserves stderr formatting and child exit codes" do
     result =
       CLI.evaluate([
-        "bash",
+        "lookup",
+        "--query",
+        "Summarize the command output.",
         "--command",
         "printf 'alpha'; printf 'beta' >&2; exit 7"
       ])
@@ -83,12 +103,14 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
     assert result.stdout =~ "[exit code: 7]"
   end
 
-  test "grep returns bounded recursive matches with truncation", %{temp_dir: temp_dir} do
+  test "lookup grep mode returns bounded recursive matches with truncation", %{temp_dir: temp_dir} do
     File.write!(Path.join(temp_dir, "a.txt"), "zero\nbeta-one\none\nbeta-two\ntwo\n")
 
     result =
       CLI.evaluate([
-        "grep",
+        "lookup",
+        "--query",
+        "Keep only beta matches.",
         "--pattern",
         "beta",
         "--path",
@@ -106,12 +128,14 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
     assert result.stdout =~ "(truncated 2 lines)"
   end
 
-  test "grep returns exit code 1 when there are no matches", %{temp_dir: temp_dir} do
+  test "lookup grep mode returns exit code 1 when there are no matches", %{temp_dir: temp_dir} do
     File.write!(Path.join(temp_dir, "a.txt"), "alpha\nbeta\n")
 
     result =
       CLI.evaluate([
-        "grep",
+        "lookup",
+        "--query",
+        "Keep only gamma mentions.",
         "--pattern",
         "gamma",
         "--path",
@@ -123,12 +147,31 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
     assert result.stdout == "(no matches found)"
   end
 
-  test "grep returns exit code 2 for invalid regular expressions", %{temp_dir: temp_dir} do
+  test "lookup grep mode requires an explicit path", %{temp_dir: temp_dir} do
     File.write!(Path.join(temp_dir, "a.txt"), "alpha\nbeta\n")
 
     result =
       CLI.evaluate([
-        "grep",
+        "lookup",
+        "--query",
+        "Keep only beta mentions.",
+        "--pattern",
+        "beta"
+      ])
+
+    assert result.exit_code == 2
+    assert result.stderr =~ "--path is required with --pattern"
+    assert result.stdout == ""
+  end
+
+  test "lookup grep mode returns exit code 2 for invalid regular expressions", %{temp_dir: temp_dir} do
+    File.write!(Path.join(temp_dir, "a.txt"), "alpha\nbeta\n")
+
+    result =
+      CLI.evaluate([
+        "lookup",
+        "--query",
+        "Keep only invalid regex output.",
         "--pattern",
         "[",
         "--path",
@@ -140,7 +183,17 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
     assert result.stdout == ""
   end
 
-  test "focus pruning sends the verified request shape and accepts pruned_code", %{
+  test "deprecated subcommands return migration guidance" do
+    for subcommand <- ["read", "grep", "bash"] do
+      result = CLI.evaluate([subcommand, "--help"])
+
+      assert result.exit_code == 2
+      assert result.stderr =~ "deprecated"
+      assert result.stderr =~ "context-pruner lookup --query"
+    end
+  end
+
+  test "lookup pruning sends the verified request shape and accepts pruned_code", %{
     temp_dir: temp_dir
   } do
     File.write!(Path.join(temp_dir, "sample.txt"), "function alpha() {}\nfunction beta() {}\n")
@@ -150,11 +203,11 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
 
       result =
         CLI.evaluate([
-          "read",
+          "lookup",
+          "--query",
+          "What mentions beta?",
           "--file-path",
-          "sample.txt",
-          "--focus",
-          "What mentions beta?"
+          "sample.txt"
         ])
 
       assert result.exit_code == 0
@@ -170,17 +223,17 @@ defmodule SymphonyElixir.ContextPruner.CLITest do
     end)
   end
 
-  test "focus pruning falls back to original output when the remote service fails" do
+  test "lookup pruning falls back to original output when the remote service fails" do
     with_pruner_server(500, %{"error" => "boom"}, fn pruner_url ->
       System.put_env("PRUNER_URL", pruner_url)
 
       result =
         CLI.evaluate([
-          "bash",
+          "lookup",
+          "--query",
+          "Where is alpha?",
           "--command",
-          "printf 'alpha'",
-          "--focus",
-          "Where is alpha?"
+          "printf 'alpha'"
         ])
 
       assert result.exit_code == 0

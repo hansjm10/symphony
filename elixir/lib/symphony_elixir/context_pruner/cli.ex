@@ -1,10 +1,11 @@
 defmodule SymphonyElixir.ContextPruner.CLI do
   @moduledoc """
-  Direct shell-facing `context-pruner` CLI.
+  Remote-model-backed `context-pruner` lookup CLI.
 
-  The command surface is intentionally small and adapts the validated Jeeves
-  `mcp-pruner` semantics into Symphony-native Elixir code without requiring the
-  old repository at runtime.
+  The supported entrypoint is `lookup`, which captures a bounded local source
+  and then submits the resulting `{ code, query }` payload to the configured
+  remote pruner service. The older `read`, `grep`, and `bash` subcommands now
+  exist only as internal compatibility helpers behind that remote-first flow.
   """
 
   alias SymphonyElixir.ContextPruner.Pruner
@@ -52,17 +53,53 @@ defmodule SymphonyElixir.ContextPruner.CLI do
       ["help", subcommand] ->
         subcommand_help(subcommand)
 
-      ["read" | rest] ->
-        evaluate_read(rest)
+      _ ->
+        evaluate_subcommand(argv)
+    end
+  end
 
-      ["grep" | rest] ->
-        evaluate_grep(rest)
+  defp evaluate_subcommand(["lookup" | rest]), do: evaluate_lookup(rest)
+  defp evaluate_subcommand(["read" | _rest]), do: deprecated_subcommand("read")
+  defp evaluate_subcommand(["grep" | _rest]), do: deprecated_subcommand("grep")
+  defp evaluate_subcommand(["bash" | _rest]), do: deprecated_subcommand("bash")
+  defp evaluate_subcommand([subcommand | _rest]), do: usage_error("Unknown subcommand: #{subcommand}")
 
-      ["bash" | rest] ->
-        evaluate_bash(rest)
+  defp evaluate_lookup(argv) do
+    {opts, positionals, invalid} =
+      OptionParser.parse(argv,
+        strict: [
+          around_line: :integer,
+          command: :string,
+          context_lines: :integer,
+          end_line: :integer,
+          file_path: :string,
+          focus: :string,
+          help: :boolean,
+          max_matches: :integer,
+          path: :string,
+          pattern: :string,
+          query: :string,
+          radius: :integer,
+          start_line: :integer
+        ]
+      )
 
-      [subcommand | _rest] ->
-        usage_error("Unknown subcommand: #{subcommand}")
+    cond do
+      Keyword.get(opts, :help, false) ->
+        success(lookup_usage())
+
+      invalid != [] or positionals != [] ->
+        command_error(lookup_usage(), 2, invalid_arguments_message(positionals, invalid))
+
+      true ->
+        with {:ok, query} <- require_lookup_query(opts),
+             {:ok, source_kind} <- resolve_lookup_source_kind(opts),
+             :ok <- validate_lookup_selector_options(source_kind, opts) do
+          dispatch_lookup(source_kind, opts, query)
+        else
+          {:error, message} ->
+            command_error(lookup_usage(), 2, message)
+        end
     end
   end
 
@@ -443,6 +480,126 @@ defmodule SymphonyElixir.ContextPruner.CLI do
     end
   end
 
+  defp dispatch_lookup(:read, opts, query) do
+    args =
+      []
+      |> append_string_option("--file-path", opts[:file_path])
+      |> append_integer_option("--start-line", opts[:start_line])
+      |> append_integer_option("--end-line", opts[:end_line])
+      |> append_integer_option("--around-line", opts[:around_line])
+      |> append_integer_option("--radius", opts[:radius])
+      |> append_string_option("--focus", query)
+
+    evaluate_read(args)
+  end
+
+  defp dispatch_lookup(:grep, opts, query) do
+    args =
+      []
+      |> append_string_option("--pattern", opts[:pattern])
+      |> append_string_option("--path", opts[:path])
+      |> append_integer_option("--context-lines", opts[:context_lines])
+      |> append_integer_option("--max-matches", opts[:max_matches])
+      |> append_string_option("--focus", query)
+
+    evaluate_grep(args)
+  end
+
+  defp dispatch_lookup(:bash, opts, query) do
+    args =
+      []
+      |> append_string_option("--command", opts[:command])
+      |> append_string_option("--focus", query)
+
+    evaluate_bash(args)
+  end
+
+  defp require_lookup_query(opts) do
+    case {trimmed_option(opts, :query), trimmed_option(opts, :focus)} do
+      {nil, nil} ->
+        {:error, "--query is required."}
+
+      {query, nil} when is_binary(query) ->
+        {:ok, query}
+
+      {nil, focus} when is_binary(focus) ->
+        {:ok, focus}
+
+      {query, focus} when query == focus ->
+        {:ok, query}
+
+      {_query, _focus} ->
+        {:error, "--focus is only a compatibility alias for --query; provide just one value."}
+    end
+  end
+
+  defp resolve_lookup_source_kind(opts) do
+    selector_keys =
+      [:file_path, :pattern, :command]
+      |> Enum.filter(&present_option?(opts, &1))
+
+    case selector_keys do
+      [:file_path] -> {:ok, :read}
+      [:pattern] -> {:ok, :grep}
+      [:command] -> {:ok, :bash}
+      [] -> {:error, "Choose exactly one lookup source: --file-path, --pattern, or --command."}
+      _ -> {:error, "Choose exactly one lookup source: --file-path, --pattern, or --command."}
+    end
+  end
+
+  defp validate_lookup_selector_options(:read, opts) do
+    reject_lookup_options(opts, [:pattern, :path, :context_lines, :max_matches, :command])
+  end
+
+  defp validate_lookup_selector_options(:grep, opts) do
+    case reject_lookup_options(opts, [
+           :file_path,
+           :start_line,
+           :end_line,
+           :around_line,
+           :radius,
+           :command
+         ]) do
+      :ok -> require_lookup_path(opts)
+      error -> error
+    end
+  end
+
+  defp validate_lookup_selector_options(:bash, opts) do
+    reject_lookup_options(opts, [
+      :file_path,
+      :start_line,
+      :end_line,
+      :around_line,
+      :radius,
+      :pattern,
+      :path,
+      :context_lines,
+      :max_matches
+    ])
+  end
+
+  defp reject_lookup_options(opts, disallowed_keys) do
+    present =
+      disallowed_keys
+      |> Enum.filter(&present_option?(opts, &1))
+
+    case present do
+      [] ->
+        :ok
+
+      _ ->
+        {:error, "Unsupported options for this lookup source: #{Enum.map_join(present, ", ", &format_option_name/1)}"}
+    end
+  end
+
+  defp require_lookup_path(opts) do
+    case trimmed_option(opts, :path) do
+      nil -> {:error, "--path is required with --pattern so grep lookups stay explicitly scoped."}
+      _path -> :ok
+    end
+  end
+
   defp compile_regex(pattern) do
     case Regex.compile(pattern) do
       {:ok, regex} ->
@@ -467,6 +624,38 @@ defmodule SymphonyElixir.ContextPruner.CLI do
       _ ->
         {:error, error_message}
     end
+  end
+
+  defp trimmed_option(opts, key) do
+    case opts[key] do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp present_option?(opts, key) do
+    case opts[key] do
+      nil -> false
+      value when is_binary(value) -> String.trim(value) != ""
+      _value -> true
+    end
+  end
+
+  defp append_string_option(args, _flag, nil), do: args
+  defp append_string_option(args, _flag, ""), do: args
+  defp append_string_option(args, flag, value), do: args ++ [flag, value]
+
+  defp append_integer_option(args, _flag, nil), do: args
+  defp append_integer_option(args, flag, value), do: args ++ [flag, Integer.to_string(value)]
+
+  defp format_option_name(key) do
+    "--" <> (key |> Atom.to_string() |> String.replace("_", "-"))
   end
 
   defp resolve_path(path) do
@@ -661,10 +850,32 @@ defmodule SymphonyElixir.ContextPruner.CLI do
     Enum.find(results, :ok, &match?({:error, _message}, &1))
   end
 
-  defp subcommand_help("read"), do: success(read_usage())
-  defp subcommand_help("grep"), do: success(grep_usage())
-  defp subcommand_help("bash"), do: success(bash_usage())
+  defp subcommand_help("lookup"), do: success(lookup_usage())
+  defp subcommand_help("read"), do: success(deprecated_subcommand_help("read"))
+  defp subcommand_help("grep"), do: success(deprecated_subcommand_help("grep"))
+  defp subcommand_help("bash"), do: success(deprecated_subcommand_help("bash"))
   defp subcommand_help(subcommand), do: usage_error("Unknown subcommand: #{subcommand}")
+
+  defp deprecated_subcommand(subcommand) do
+    command_error(lookup_usage(), 2, deprecated_subcommand_message(subcommand))
+  end
+
+  defp deprecated_subcommand_help(subcommand) do
+    """
+    #{deprecated_subcommand_message(subcommand)}
+
+    #{lookup_usage()}
+    """
+  end
+
+  defp deprecated_subcommand_message("read"),
+    do: "`context-pruner read` is deprecated. Use `context-pruner lookup --query <query> --file-path <path> ...` instead."
+
+  defp deprecated_subcommand_message("grep"),
+    do: "`context-pruner grep` is deprecated. Use `context-pruner lookup --query <query> --pattern <regex> --path <path> ...` instead."
+
+  defp deprecated_subcommand_message("bash"),
+    do: "`context-pruner bash` is deprecated. Use `context-pruner lookup --query <query> --command <shell-command>` instead."
 
   defp usage_error(message), do: command_error(usage(), 2, message)
 
@@ -707,9 +918,38 @@ defmodule SymphonyElixir.ContextPruner.CLI do
   defp usage do
     """
     Usage:
-      context-pruner read --file-path <path> [--start-line <n> --end-line <n> | --around-line <n> --radius <n>] [--focus <query>]
-      context-pruner grep --pattern <regex> [--path <path>] [--context-lines <n>] [--max-matches <n>] [--focus <query>]
-      context-pruner bash --command <shell-command> [--focus <query>]
+      context-pruner lookup --query <query> (--file-path <path> [--start-line <n> --end-line <n> | --around-line <n> --radius <n>] | --pattern <regex> --path <path> [--context-lines <n>] [--max-matches <n>] | --command <shell-command>)
+
+    Deprecated compatibility entrypoints:
+      context-pruner read ...
+      context-pruner grep ...
+      context-pruner bash ...
+
+    Use `context-pruner help lookup` for the supported remote-only lookup flow.
+    """
+  end
+
+  defp lookup_usage do
+    """
+    Usage:
+      context-pruner lookup --query <query> --file-path <path> [--start-line <n> --end-line <n>]
+      context-pruner lookup --query <query> --file-path <path> [--around-line <n> --radius <n>]
+      context-pruner lookup --query <query> --pattern <regex> --path <path> [--context-lines <n>] [--max-matches <n>]
+      context-pruner lookup --query <query> --command <shell-command>
+
+    Options:
+      --query <query>       Required remote retention goal submitted as { code, query }.
+      --file-path <path>    File source for a bounded lookup window.
+      --start-line <n>      1-based inclusive start line for file-window lookups.
+      --end-line <n>        1-based inclusive end line for file-window lookups.
+      --around-line <n>     1-based anchor line for around/radius file-window lookups.
+      --radius <n>          Context radius used with --around-line. Default: #{@default_radius}
+      --pattern <regex>     Grep-style source selector used before remote lookup.
+      --path <path>         Required explicit file or directory scope for grep lookups.
+      --context-lines <n>   Number of surrounding lines to include. Max: #{@max_context_lines}
+      --max-matches <n>     Maximum output lines before truncation. Default: #{@default_max_matches}
+      --command <command>   Exception-only shell source when the answer cannot come directly from files.
+      --focus <query>       Deprecated compatibility alias for --query.
     """
   end
 

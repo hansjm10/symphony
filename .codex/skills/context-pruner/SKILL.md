@@ -1,20 +1,23 @@
 ---
 name: context-pruner
 description:
-  Use the local `context-pruner` CLI to keep file reads, searches, and
-  shell-derived context small and focused. Prefer it when broad raw reads or
-  grep sweeps would pull in more context than needed.
+  Use the `context-pruner` CLI for remote-model-backed context lookup
+  before broad raw reads or repo sweeps.
 ---
 
 # Context Pruner
 
 ## What It Is
 
-- `context-pruner` is a local CLI for bounded file reads, targeted recursive
-  search, and optional prune-focused command output capture.
+- `context-pruner` is Symphony's remote-model-backed context lookup CLI.
+- The supported interface is `context-pruner lookup`, which:
+  - captures a bounded local source window
+  - submits `{ code, query }` to the configured pruner service
+  - returns the pruned result, or the original bounded source with a warning if the remote prune step is unavailable
 - This skill exists to change agent behavior, not just to document a command:
-  prefer smaller, intentional context pulls over broad `cat`, `sed`, `rg`, or
-  ad hoc shell output when the CLI can answer the question directly.
+  when you are trying to find repository context, start with
+  `context-pruner lookup` instead of broad `cat`, `sed`, `rg`, or ad hoc shell
+  output.
 - In fresh Symphony workspaces the launcher should be on `PATH` as
   `context-pruner`. In a repo checkout you can also invoke `./context-pruner`
   from the repo root.
@@ -26,18 +29,33 @@ description:
   - `elixir/lib/symphony_elixir/context_pruner/`
   - `elixir/docs/context_pruner.md`
 
-## Command Surface
+## Supported Command Surface
 
-- `context-pruner read --file-path <path> [--start-line <n> --end-line <n> | --around-line <n> --radius <n>] [--focus <query>]`
-- `context-pruner grep --pattern <regex> [--path <path>] [--context-lines <n>] [--max-matches <n>] [--focus <query>]`
-- `context-pruner bash --command <shell-command> [--focus <query>]`
-- `--focus` sends `{ code, query }` to the configured pruner service.
-  - Primary response field: `pruned_code`
-  - Compatibility fallbacks: `content`, `text`
+- `context-pruner lookup --query <goal> --file-path <path> [--start-line <n> --end-line <n> | --around-line <n> --radius <n>]`
+- `context-pruner lookup --query <goal> --pattern <regex> --path <path> [--context-lines <n>] [--max-matches <n>]`
+- `context-pruner lookup --query <goal> --command <shell-command>`
+- `--query` is the required remote retention goal.
+- Primary response field: `pruned_code`
+- Compatibility fallbacks: `content`, `text`
+- Deprecated compatibility aliases:
+  - `context-pruner read ...`
+  - `context-pruner grep ...`
+  - `context-pruner bash ...`
+  - Do not use those in new workflow guidance or normal agent behavior.
 
-## Writing `--focus`
+## Required Posture
 
-- Treat `--focus` as the remote pruner model's task description, not as a
+- If you are discovering context, use `context-pruner lookup` first.
+- Do not start with full-file reads or broad repo sweeps while the lookup flow
+  can express the request.
+- Start with the smallest file window, grep scope, or shell command that can
+  answer the question.
+- Use `--command` only when the answer must come from shell output rather than
+  directly from files.
+
+## Query Phrasing
+
+- Treat `--query` as the remote pruner model's task description, not as a
   generic "make this shorter" hint.
 - For broader mixed file windows, prefer exact field-definition prompts such as
   `Keep exactly the statements that define PRUNER_URL, the alias behavior,
@@ -48,7 +66,7 @@ description:
 - For ultra-narrow fact extraction, prefer answer-target prompts such as
   `Extract only the minimum text needed to answer: what is the request payload
   shape and what is the primary response field?`
-- Avoid negative-only phrasing like `Drop examples, framing, and unrelated
+- Avoid negative-only phrasing such as `Drop examples, framing, and unrelated
   lines.` In the current benchmark it tended to retain more text than the
   clearer question-style or keep-only prompts.
 - Avoid line-number-only instructions such as `Return only lines 49, 54, 67,
@@ -56,95 +74,58 @@ description:
 - Keep the query concrete and anchored to the fields, behaviors, or contract
   you actually need from the returned text.
 
-## When To Prefer It
-
-- Use `read` instead of broad `cat` or `sed` when you know the file and can
-  bound the window by line range or by line-plus-radius.
-- Use `grep` instead of wide `rg` or `grep -R` sweeps when you want matching
-  lines plus bounded nearby context and a match cap.
-- Use `bash` when you need shell-derived output but want to keep the final
-  model-facing text small and focused.
-- Add `--focus` only after you have already narrowed the scope with
-  `--file-path`, `--start-line`, `--end-line`, `--around-line`, `--radius`,
-  `--path`, `--context-lines`, or `--max-matches`.
-- Prefer plain bounded output without pruning when the result is already small
-  enough to inspect directly.
-
-## When Not To Prefer It
+## Exceptions
 
 - Tiny one-line reads or obviously small outputs such as `git status --short`
-  can use ordinary shell commands directly.
+  can use ordinary shell commands directly when you are not performing
+  repository context discovery.
 - Interactive commands, streaming output, or cases where you need exact raw
   bytes should stay with normal shell tooling.
 - If the CLI cannot express the search you need, use a targeted fallback such
   as `rg -n` or `sed -n`, but keep it narrow.
 
-## Workflow
-
-1. Start with the smallest file/path window that can answer the question.
-2. Prefer `read` or `grep` before `bash` when the data already lives in files.
-3. Use line windows, context lines, and match caps before reaching for
-   pruning.
-4. Add `--focus "<question>"` only when the bounded output is still noisier
-   than needed.
-5. Write `--focus` to describe the target facts precisely:
-   - broader mixed file window -> `Keep exactly the statements that define ...`
-   - grep-style clustered output -> `Which lines are relevant to ...?`
-   - ultra-narrow fact lookup -> `Extract only the minimum text needed to answer ...`
-6. If pruning fails, keep going with the unpruned output instead of retrying
-   in a loop or widening the read.
-
 ## Copy-Paste Examples
 
-### Focused File Reads
+### File-Window Lookup
 
 ```bash
-context-pruner read \
-  --file-path elixir/lib/symphony_elixir/context_pruner/cli.ex \
-  --start-line 707 \
-  --end-line 753
-
-context-pruner read \
+context-pruner lookup \
+  --query "Keep exactly the statements that define the env contract." \
   --file-path elixir/docs/context_pruner.md \
-  --around-line 31 \
-  --radius 12
+  --around-line 49 \
+  --radius 6
+
+context-pruner lookup \
+  --query "Extract only the minimum text needed to answer how grep lookups are scoped." \
+  --file-path elixir/WORKFLOW.md \
+  --start-line 93 \
+  --end-line 108
 ```
 
-### Targeted Search With Context
+### Scoped Search Lookup
 
 ```bash
-context-pruner grep \
-  --pattern "context-pruner" \
-  --path elixir \
-  --context-lines 2 \
-  --max-matches 20
-
-context-pruner grep \
+context-pruner lookup \
+  --query "Which lines are relevant to the env variable contract?" \
   --pattern "PRUNER_URL|JEEVES_PRUNER_URL" \
   --path elixir/lib \
   --context-lines 1 \
   --max-matches 12
+
+context-pruner lookup \
+  --query "Which lines define the deprecated local subcommand surface?" \
+  --pattern "context-pruner (read|grep|bash)" \
+  --path .codex/skills/context-pruner/SKILL.md \
+  --context-lines 1 \
+  --max-matches 20
 ```
 
-### Optional Prune-Focused Commands
+### Exception-Only Shell Lookup
 
 ```bash
-context-pruner read \
-  --file-path elixir/docs/context_pruner.md \
-  --start-line 35 \
-  --end-line 77 \
-  --focus "Keep exactly the statements that define PRUNER_URL, the JEEVES_PRUNER_URL alias behavior, the request body, and the primary response field pruned_code."
-
-context-pruner grep \
-  --pattern "PRUNER_URL|JEEVES_PRUNER_URL" \
-  --path elixir/lib \
-  --context-lines 1 \
-  --max-matches 12 \
-  --focus "Which lines are relevant to the env variable contract and alias behavior?"
-
-context-pruner bash \
-  --command "git diff --stat origin/main...HEAD" \
-  --focus "Extract only the minimum text needed to answer: which files are related to current context-pruner skill work?"
+context-pruner lookup \
+  --query "Keep only files related to the current context-pruner branch diff." \
+  --command "git diff --stat origin/main...HEAD"
 ```
 
 ## Pruner Environment And Verification
@@ -164,11 +145,11 @@ Example verification:
 
 ```bash
 PRUNER_URL="${PRUNER_URL:-$JEEVES_PRUNER_URL}" \
-context-pruner read \
+context-pruner lookup \
+  --query "Keep only the pruner contract." \
   --file-path elixir/docs/context_pruner.md \
-  --start-line 35 \
-  --end-line 77 \
-  --focus "Keep exactly the statements that define the pruner env contract, request body, and primary response field."
+  --around-line 45 \
+  --radius 12
 ```
 
 ## Fallback Behavior
@@ -179,12 +160,13 @@ context-pruner read \
   - `rg -n "pattern" path/to/search/root`
   - `bash -lc "<command>"`
 - Keep fallback commands bounded. Do not replace a failed `context-pruner`
-  call with a full-file `cat` or an unbounded repo-wide sweep unless there is
+  lookup with a full-file `cat` or an unbounded repo-wide sweep unless there is
   no narrower alternative.
-- If pruning is disabled because `PRUNER_URL` and `JEEVES_PRUNER_URL` are both
-  unset, `--focus` simply returns the original content.
+- If the remote prune step is disabled because `PRUNER_URL` and
+  `JEEVES_PRUNER_URL` are both unset, `lookup` returns the original bounded
+  source.
 - If the remote prune call fails or the endpoint is disabled, the CLI falls
-  back to the original content and warns on stderr. Treat that as a soft
+  back to the original bounded source and warns on stderr. Treat that as a soft
   failure and continue with the returned text.
-- If bounded output is still too large, refine the file window, regex, path,
-  or match limit before escalating to broader raw reads.
+- If bounded output is still too large, refine the file window, regex, path, or
+  match limit before escalating to broader raw reads.

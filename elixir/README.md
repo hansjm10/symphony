@@ -159,9 +159,9 @@ codex:
 
 ## Context Pruner CLI
 
-Fresh workspaces can use `context-pruner` directly for focused file reads,
-bounded subtree search, and shell command capture with optional prune-by-focus
-behavior.
+Fresh workspaces can use `context-pruner lookup` directly for remote-model-backed
+repository context discovery from bounded file windows, scoped search results,
+or exception-only shell capture.
 
 See [docs/context_pruner.md](docs/context_pruner.md) for the CLI syntax, env
 contract, verified prune payload, primary `pruned_code` response field,
