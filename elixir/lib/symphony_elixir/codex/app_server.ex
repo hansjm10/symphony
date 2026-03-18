@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   """
 
   require Logger
-  alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, SSH}
+  alias SymphonyElixir.{Codex.DynamicTool, Config, HostShell, PathSafety, SSH}
 
   @initialize_id 1
   @thread_start_id 2
@@ -41,7 +41,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     worker_host = Keyword.get(opts, :worker_host)
 
     with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host),
-         {:ok, port} <- start_port(expanded_workspace, worker_host) do
+         {:ok, port} <- start_port(expanded_workspace, worker_host, opts) do
       metadata = port_metadata(port, worker_host)
 
       with {:ok, session_policies} <- session_policies(expanded_workspace, worker_host),
@@ -186,40 +186,244 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, nil) do
-    executable = System.find_executable("bash")
+  @doc false
+  @spec local_launch_spec_for_test(keyword()) ::
+          {:ok, %{shell: HostShell.shell_config(), command: String.t()}} | {:error, term()}
+  def local_launch_spec_for_test(opts \\ []) do
+    resolve_local_launch_spec(opts)
+  end
 
-    if is_nil(executable) do
-      {:error, :bash_not_found}
-    else
+  @doc false
+  def local_port_command_for_test(command, os_type), do: local_port_command(command, os_type)
+
+  defp start_port(workspace, nil, opts) do
+    with {:ok, %{shell: shell, command: command, raw_command: raw_command}} <- resolve_local_launch_spec(opts),
+         {:ok, executable, args, hide_console?} <- port_command(shell, command, raw_command) do
+      port_opts =
+        [
+          :binary,
+          :exit_status,
+          :stderr_to_stdout,
+          args: Enum.map(args, &String.to_charlist/1),
+          cd: String.to_charlist(workspace),
+          line: @port_line_bytes
+        ]
+        |> maybe_hide_windows_console(hide_console?)
+
       port =
         Port.open(
           {:spawn_executable, String.to_charlist(executable)},
-          [
-            :binary,
-            :exit_status,
-            :stderr_to_stdout,
-            args: [~c"-lc", String.to_charlist(Config.settings!().codex.command)],
-            cd: String.to_charlist(workspace),
-            line: @port_line_bytes
-          ]
+          port_opts
         )
 
       {:ok, port}
     end
   end
 
-  defp start_port(workspace, worker_host) when is_binary(worker_host) do
-    remote_command = remote_launch_command(workspace)
-    SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
+  defp start_port(workspace, worker_host, _opts) when is_binary(worker_host) do
+    with {:ok, remote_command} <- remote_launch_command(workspace) do
+      SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
+    end
   end
 
+  defp resolve_local_launch_spec(opts) do
+    family_opts =
+      case Keyword.get(opts, :host_shell_family, Application.get_env(:symphony_elixir, :test_host_shell_family_override)) do
+        family when family in [:posix, :windows] -> [family: family]
+        _ -> []
+      end
+
+    shell_resolver =
+      Keyword.get(opts, :shell_resolver, fn command, resolver_opts ->
+        HostShell.resolve_local_command(command, resolver_opts)
+      end)
+
+    case shell_resolver.(Config.settings!().codex.command, Keyword.merge(family_opts, label: "Codex command")) do
+      {:ok, shell, command} ->
+        {:ok, %{shell: shell, command: command, raw_command: Config.settings!().codex.command}}
+
+      {:error, message, status} ->
+        {:error, {:codex_shell_error, message, status}}
+    end
+  end
+
+  defp port_command(%{family: :windows}, command, raw_command) when is_binary(raw_command) do
+    case local_port_command(command, :os.type()) do
+      {:ok, executable, args} ->
+        {:ok, executable, args, true}
+
+      {:error, _reason} ->
+        case HostShell.resolve_local(family: :windows) do
+          {:ok, shell} -> port_command(shell, command, %{})
+          {:error, message, status} -> {:error, {:codex_shell_error, message, status}}
+        end
+    end
+  end
+
+  defp port_command(%{family: :windows} = shell, command, _raw_command) do
+    {:ok, shell.executable, shell.args_prefix ++ [command], true}
+  end
+
+  defp port_command(shell, command, _raw_command) do
+    {:ok, shell.executable, shell.args_prefix ++ [command], match?({:win32, _}, :os.type())}
+  end
+
+  defp local_port_command(command, {:win32, _}) when is_binary(command) do
+    case windows_direct_port_command(command) do
+      {:ok, executable, args} ->
+        {:ok, executable, args}
+
+      :error ->
+        case System.find_executable("cmd.exe") do
+          nil -> {:error, :cmd_not_found}
+          executable -> {:ok, executable, ["/d", "/s", "/c", command]}
+        end
+    end
+  end
+
+  defp local_port_command(command, _os_type) when is_binary(command) do
+    case System.find_executable("bash") do
+      nil -> {:error, :bash_not_found}
+      executable -> {:ok, executable, ["-lc", command]}
+    end
+  end
+
+  defp windows_direct_port_command(command) when is_binary(command) do
+    cond do
+      windows_shell_command?(command) ->
+        :error
+
+      true ->
+        case OptionParser.split(command) do
+          [program | args] ->
+            case resolve_windows_executable(program) do
+              executable when is_binary(executable) -> {:ok, executable, args}
+              _ -> :error
+            end
+
+          _ ->
+            :error
+        end
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp windows_shell_command?(command) when is_binary(command) do
+    String.contains?(command, ["&&", "||", "|", ">", "<", "%", "!", "^", "\n", "\r"])
+  end
+
+  defp resolve_windows_executable(program) when is_binary(program) do
+    case find_windows_executable(program) do
+      nil ->
+        nil
+
+      executable ->
+        native_windows_codex_executable(executable) || executable
+    end
+  end
+
+  defp find_windows_executable(program) when is_binary(program) do
+    cond do
+      String.contains?(program, ["/", "\\"]) or Path.type(program) == :absolute ->
+        expanded_program = Path.expand(program)
+
+        cond do
+          File.regular?(expanded_program) and windows_executable_path?(expanded_program) ->
+            expanded_program
+
+          Path.extname(expanded_program) == "" ->
+            Enum.find_value(windows_path_extensions(), fn extension ->
+              candidate = expanded_program <> extension
+              if File.regular?(candidate), do: candidate
+            end)
+
+          true ->
+            nil
+        end
+
+      true ->
+        System.find_executable(program)
+    end
+  end
+
+  defp windows_executable_path?(path) when is_binary(path) do
+    extension = path |> Path.extname() |> String.upcase()
+    extension != "" and extension in windows_path_extensions()
+  end
+
+  defp windows_path_extensions do
+    System.get_env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    |> String.split(";", trim: true)
+  end
+
+  defp native_windows_codex_executable(executable) when is_binary(executable) do
+    case executable |> Path.basename() |> String.downcase() do
+      "codex.exe" ->
+        executable
+
+      "codex" ->
+        windows_codex_native_candidates(executable)
+        |> Enum.find(&File.regular?/1)
+
+      "codex.cmd" ->
+        windows_codex_native_candidates(executable)
+        |> Enum.find(&File.regular?/1)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp windows_codex_native_candidates(launcher_path) when is_binary(launcher_path) do
+    launcher_dir = Path.dirname(launcher_path)
+    parent_dir = Path.dirname(launcher_dir)
+
+    package_roots =
+      [
+        Path.join([launcher_dir, "node_modules", "@openai", "codex"]),
+        Path.join([parent_dir, "@openai", "codex"]),
+        Path.join([parent_dir, "node_modules", "@openai", "codex"])
+      ]
+      |> Enum.uniq()
+
+    for package_root <- package_roots,
+        package_name <- ["@openai/codex-win32-x64", "@openai/codex-win32-arm64"],
+        package_segments = String.split(package_name, "/"),
+        native_root <- [
+          Path.join([package_root, "node_modules" | package_segments]),
+          Path.join([package_root | package_segments])
+        ],
+        triple <- ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"] do
+      Path.join([native_root, "vendor", triple, "codex", "codex.exe"])
+    end
+  end
+
+  defp maybe_hide_windows_console(port_opts, true) when is_list(port_opts) do
+    case :os.type() do
+      {:win32, _} -> [:hide | port_opts]
+      _ -> port_opts
+    end
+  end
+
+  defp maybe_hide_windows_console(port_opts, _hide_console?), do: port_opts
+
   defp remote_launch_command(workspace) when is_binary(workspace) do
-    [
-      "cd #{shell_escape(workspace)}",
-      "exec #{Config.settings!().codex.command}"
-    ]
-    |> Enum.join(" && ")
+    with {:ok, command} <- resolve_remote_launch_command() do
+      {:ok,
+       [
+         "cd #{shell_escape(workspace)}",
+         "exec #{command}"
+       ]
+       |> Enum.join(" && ")}
+    end
+  end
+
+  defp resolve_remote_launch_command do
+    case HostShell.resolve_remote_posix_command(Config.settings!().codex.command, label: "Codex command") do
+      {:ok, command} -> {:ok, command}
+      {:error, message, status} -> {:error, {:codex_shell_error, message, status}}
+    end
   end
 
   defp port_metadata(port, worker_host) when is_port(port) do

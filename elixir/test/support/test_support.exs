@@ -10,6 +10,7 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.CLI
       alias SymphonyElixir.Codex.AppServer
       alias SymphonyElixir.Config
+      alias SymphonyElixir.HostShell
       alias SymphonyElixir.HttpServer
       alias SymphonyElixir.Linear.Client
       alias SymphonyElixir.Linear.Issue
@@ -22,9 +23,20 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [
+          write_workflow_file!: 1,
+          write_workflow_file!: 2,
+          write_posix_script!: 2,
+          restore_env: 2,
+          stop_default_http_server: 0,
+          posix_shell_path: 1,
+          codex_command_for_script: 1,
+          codex_command_for_script: 2
+        ]
 
       setup do
+        previous_host_shell_override = Application.get_env(:symphony_elixir, :test_host_shell_family_override)
+
         workflow_root =
           Path.join(
             System.tmp_dir!(),
@@ -42,6 +54,13 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :workflow_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :server_host_override)
+
+          if is_nil(previous_host_shell_override) do
+            Application.delete_env(:symphony_elixir, :test_host_shell_family_override)
+          else
+            Application.put_env(:symphony_elixir, :test_host_shell_family_override, previous_host_shell_override)
+          end
+
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
           File.rm_rf(workflow_root)
@@ -69,6 +88,58 @@ defmodule SymphonyElixir.TestSupport do
 
   def restore_env(key, nil), do: System.delete_env(key)
   def restore_env(key, value), do: System.put_env(key, value)
+
+  def write_posix_script!(path, contents) when is_binary(path) and is_binary(contents) do
+    normalized_contents =
+      contents
+      |> String.replace("\r\n", "\n")
+      |> maybe_inline_trace_path("SYMP_TEST_CODEx_TRACE")
+      |> maybe_inline_trace_path("SYMP_TEST_CODex_TRACE")
+      |> maybe_inline_trace_path("SYMP_TEST_SSH_TRACE")
+
+    File.write!(path, normalized_contents)
+  end
+
+  defp maybe_inline_trace_path(contents, env_name) when is_binary(contents) and is_binary(env_name) do
+    case {System.get_env(env_name), :os.type()} do
+      {trace_path, {:win32, _}} when is_binary(trace_path) and trace_path != "" ->
+        Regex.replace(~r/\$\{#{Regex.escape(env_name)}:-[^}]+\}/, contents, trace_path)
+
+      _ ->
+        contents
+    end
+  end
+
+  def posix_shell_path(path) when is_binary(path) do
+    expanded_path = Path.expand(path)
+
+    case :os.type() do
+      {:win32, _} ->
+        expanded_path
+        |> String.replace("\\", "/")
+        |> then(fn normalized_path ->
+          Regex.replace(~r/\A([A-Za-z]):/, normalized_path, fn _match, drive ->
+            "/mnt/#{String.downcase(drive)}"
+          end)
+        end)
+
+      _ ->
+        expanded_path
+    end
+  end
+
+  def codex_command_for_script(script_path, args \\ "app-server") when is_binary(script_path) and is_binary(args) do
+    case SymphonyElixir.HostShell.family() do
+      :windows ->
+        %{
+          posix: "#{posix_shell_path(script_path)} #{args}",
+          windows: "bash #{posix_shell_path(script_path)} #{args}"
+        }
+
+      :posix ->
+        "#{script_path} #{args}"
+    end
+  end
 
   def stop_default_http_server do
     case Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn
@@ -205,7 +276,7 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp yaml_value(value) when is_binary(value) do
-    "\"" <> String.replace(value, "\"", "\\\"") <> "\""
+    "'" <> String.replace(value, "'", "''") <> "'"
   end
 
   defp yaml_value(value) when is_integer(value), do: to_string(value)

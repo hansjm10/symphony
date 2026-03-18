@@ -411,11 +411,15 @@ defmodule SymphonyElixir.ContextPruner.CLI do
       )
 
     wrapped_command = HostShell.stderr_redirect_command(shell, command, stderr_path)
-    File.write!(stderr_path, "")
+      File.write!(stderr_path, "")
 
-    try do
-      {stdout, exit_code} =
-        System.cmd(shell.executable, shell.args_prefix ++ [wrapped_command], cd: current_working_directory())
+      try do
+        {stdout, exit_code} =
+          SymphonyElixir.ProcessRunner.run(
+            shell.executable,
+            shell.args_prefix ++ [wrapped_command],
+            cd: current_working_directory()
+          )
 
       stderr = read_temp_output(stderr_path)
       {:ok, stdout, stderr, exit_code}
