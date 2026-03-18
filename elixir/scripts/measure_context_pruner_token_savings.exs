@@ -1,159 +1,411 @@
 defmodule ContextPrunerTokenSavingsMeasurement do
-  alias SymphonyElixir.Workflow
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.ContextPruner.CLI
+  alias SymphonyElixir.ContextPruner.{CLI, Pruner}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Workflow
 
-  @baseline_workflow_ref "24b6e23"
-  @default_pruner_url "http://192.168.1.15:8000/prune"
-  @direct_probe_timeout_ms 10_000
+  @artifact_slug "idl-1147-remote-pruner-token-savings"
   @codex_command "codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=xhigh --model gpt-5.3-codex app-server"
+  @downstream_env "MEASURE_CONTEXT_PRUNER_INCLUDE_CODEX"
+  @direct_probe_timeout_ms 10_000
 
   def main do
     repo_root = Path.expand("../..", __DIR__)
     elixir_root = Path.expand("..", __DIR__)
-    workspace_root = Path.dirname(repo_root)
-    workspace = repo_root
+    output_dir = Path.join(elixir_root, "docs/measurements")
+    captured_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    captured_date = Date.utc_today() |> Date.to_iso8601()
     current_head = git_output!(repo_root, ["rev-parse", "HEAD"])
     current_short_head = git_output!(repo_root, ["rev-parse", "--short", "HEAD"])
-    baseline_short_head = git_output!(repo_root, ["rev-parse", "--short", @baseline_workflow_ref])
-    pruner_url = pruner_url()
-    timestamp = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    selected_cases = selected_cases()
+    {pruner_url, pruner_warnings} = pruner_url!()
 
-    workflow_dir = Path.join(System.tmp_dir!(), "symphony-context-pruner-measure-#{System.unique_integer([:positive])}")
+    {:ok, _started} = Application.ensure_all_started(:req)
+
+    remote_cases =
+      Enum.map(selected_cases, fn benchmark_case ->
+        measure_remote_case(pruner_url, repo_root, benchmark_case)
+      end)
+
+    downstream_codex_impact =
+      maybe_measure_downstream_codex_impact(repo_root, pruner_url, selected_cases, remote_cases)
+
+    json_file_name = "#{@artifact_slug}-#{captured_date}.json"
+    markdown_file_name = "#{@artifact_slug}-#{captured_date}.md"
+    json_path = Path.join(output_dir, json_file_name)
+    markdown_path = Path.join(output_dir, markdown_file_name)
+
+    report = %{
+      "measurementId" => "IDL-1147",
+      "capturedAt" => captured_at,
+      "workspace" => repo_root,
+      "workspaceTree" => current_short_head,
+      "workspaceTreeRef" => current_head,
+      "benchmarkTarget" => %{
+        "name" => "remote_pruner_payload_reduction",
+        "endpoint" => pruner_url,
+        "requestShape" => %{"code" => "...", "query" => "..."},
+        "producerNote" =>
+          "Local `context-pruner read` and `context-pruner grep` commands only produced the submitted payloads. The benchmark target is the remote transformation applied to the same `{code, query}` input.",
+        "prunerConfigWarnings" => pruner_warnings
+      },
+      "artifacts" => %{
+        "jsonPath" => Path.relative_to(json_path, repo_root),
+        "markdownPath" => Path.relative_to(markdown_path, repo_root),
+        "scriptPath" => "elixir/scripts/measure_context_pruner_token_savings.exs"
+      },
+      "rerun" => %{
+        "requiredEnv" => ["PRUNER_URL"],
+        "compatibilityAlias" => "JEEVES_PRUNER_URL is accepted only when PRUNER_URL is unset.",
+        "defaultCommand" => "cd elixir && mise exec -- mix run --no-start scripts/measure_context_pruner_token_savings.exs",
+        "optionalDownstreamCommand" => "cd elixir && #{@downstream_env}=1 mise exec -- mix run --no-start scripts/measure_context_pruner_token_savings.exs"
+      },
+      "remotePrunerSavings" => %{
+        "cases" => remote_cases,
+        "summary" => summarize_remote_cases(remote_cases)
+      },
+      "downstreamCodexImpact" => downstream_codex_impact
+    }
+
+    File.mkdir_p!(output_dir)
+    File.write!(json_path, Jason.encode!(report, pretty: true))
+    File.write!(markdown_path, render_markdown(report))
+
+    IO.puts(json_path)
+    IO.puts(markdown_path)
+  end
+
+  defp measurement_cases do
+    [
+      %{
+        id: "file_window_small_env_contract",
+        producer_type: "file_window",
+        label: "Small env-contract file window",
+        query: "Keep only the env contract and alias behavior.",
+        producer_args: [
+          "read",
+          "--file-path",
+          "elixir/docs/context_pruner.md",
+          "--around-line",
+          "49",
+          "--radius",
+          "6"
+        ],
+        breakpoint_note: "This window is already query-shaped, so the remote pruner should only help if it can still trim line-number noise or section framing."
+      },
+      %{
+        id: "file_window_mixed_contract_section",
+        producer_type: "file_window",
+        label: "Broader contract section file window",
+        query: "Keep only the env contract, compatibility alias, request body, and primary response field.",
+        producer_args: [
+          "read",
+          "--file-path",
+          "elixir/docs/context_pruner.md",
+          "--start-line",
+          "35",
+          "--end-line",
+          "77"
+        ],
+        breakpoint_note: "This wider file window mixes examples, env guidance, request shape, and exit-code details, so it should show whether the remote pruner can strip surrounding sections."
+      },
+      %{
+        id: "search_result_remote_metadata_cluster",
+        producer_type: "search_result",
+        label: "Already-clustered metadata grep",
+        query: "Keep only the remote verification metadata and what it proved.",
+        producer_args: [
+          "grep",
+          "--pattern",
+          "origin_token_cnt|left_token_cnt|model_input_token_cnt|pruned_code|JEEVES_PRUNER_URL|PRUNER_URL",
+          "--path",
+          "elixir/docs",
+          "--context-lines",
+          "2",
+          "--max-matches",
+          "20"
+        ],
+        breakpoint_note: "This grep is already concentrated on the exact remote-verification terms, so it should reveal when the remote pruner has little left to remove."
+      },
+      %{
+        id: "search_result_docs_remote_contract_mix",
+        producer_type: "search_result",
+        label: "Docs-only remote-contract grep",
+        query: "Keep only the remote request shape and primary response field.",
+        producer_args: [
+          "grep",
+          "--pattern",
+          "PRUNER_URL|JEEVES_PRUNER_URL|pruned_code|request body|query|token_scores|kept_frags",
+          "--path",
+          "elixir/docs",
+          "--context-lines",
+          "2",
+          "--max-matches",
+          "20"
+        ],
+        breakpoint_note:
+          "This grep stays inside the docs subtree but still mixes env guidance, request-shape text, and remote score metadata, so it should show whether the remote pruner can isolate just the request/response contract."
+      }
+    ]
+  end
+
+  defp selected_cases do
+    case System.get_env("MEASURE_CONTEXT_PRUNER_CASES") do
+      nil ->
+        measurement_cases()
+
+      raw_case_ids ->
+        requested_ids =
+          raw_case_ids
+          |> String.split(",", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+
+        cases_by_id = Map.new(measurement_cases(), fn benchmark_case -> {benchmark_case.id, benchmark_case} end)
+        unknown_ids = Enum.reject(requested_ids, &Map.has_key?(cases_by_id, &1))
+
+        if unknown_ids != [] do
+          raise "Unknown MEASURE_CONTEXT_PRUNER_CASES entries: #{Enum.join(unknown_ids, ", ")}"
+        end
+
+        Enum.map(requested_ids, &Map.fetch!(cases_by_id, &1))
+    end
+  end
+
+  defp pruner_url! do
+    {config, warnings} = Pruner.config(System.get_env())
+
+    if config.enabled do
+      {config.url, warnings}
+    else
+      raise """
+      PRUNER_URL is required for this opt-in measurement.
+      Set PRUNER_URL to the live prune endpoint before running the script.
+      JEEVES_PRUNER_URL is accepted only as a compatibility alias when PRUNER_URL is unset.
+      """
+    end
+  end
+
+  defp measure_remote_case(pruner_url, repo_root, benchmark_case) do
+    producer_result =
+      with_temporary_env(%{"CONTEXT_PRUNER_CWD" => repo_root}, fn ->
+        CLI.evaluate(benchmark_case.producer_args)
+      end)
+
+    if producer_result.exit_code != 0 do
+      raise "Producer command failed for #{benchmark_case.id}: #{producer_result.stderr}"
+    end
+
+    producer_stdout = sanitize_text(producer_result.stdout)
+    producer_stderr = sanitize_text(producer_result.stderr)
+
+    payload = %{"code" => producer_stdout, "query" => benchmark_case.query}
+
+    {:ok, response} =
+      Req.post(pruner_url,
+        connect_options: [timeout: @direct_probe_timeout_ms],
+        receive_timeout: @direct_probe_timeout_ms,
+        retry: false,
+        json: payload
+      )
+
+    body = response.body
+    pruned_code = body |> extract_pruned_code!(benchmark_case.id) |> sanitize_text()
+    origin_token_count = maybe_integer(Map.get(body, "origin_token_cnt"))
+    left_token_count = maybe_integer(Map.get(body, "left_token_cnt"))
+    producer_byte_count = byte_size(producer_stdout)
+    pruned_byte_count = byte_size(pruned_code)
+    producer_line_count = line_count(producer_stdout)
+    pruned_line_count = line_count(pruned_code)
+    token_savings = subtract_if_present(origin_token_count, left_token_count)
+    byte_savings = producer_byte_count - pruned_byte_count
+    line_savings = producer_line_count - pruned_line_count
+    reduction_class = reduction_class(token_savings, origin_token_count, byte_savings, producer_byte_count)
+
+    %{
+      "id" => benchmark_case.id,
+      "label" => benchmark_case.label,
+      "producerType" => benchmark_case.producer_type,
+      "query" => benchmark_case.query,
+      "breakpointNote" => benchmark_case.breakpoint_note,
+      "producerCommand" => "context-pruner " <> shell_join(benchmark_case.producer_args),
+      "producerOutput" => %{
+        "exitCode" => producer_result.exit_code,
+        "stderr" => producer_stderr,
+        "stdout" => producer_stdout,
+        "byteCount" => producer_byte_count,
+        "lineCount" => producer_line_count
+      },
+      "remoteResponse" => %{
+        "httpStatus" => response.status,
+        "responseKeys" => response_keys(body),
+        "score" => Map.get(body, "score"),
+        "keptFrags" => Map.get(body, "kept_frags"),
+        "originTokenCount" => origin_token_count,
+        "leftTokenCount" => left_token_count,
+        "modelInputTokenCount" => maybe_integer(Map.get(body, "model_input_token_cnt")),
+        "errorMessage" => Map.get(body, "error_msg"),
+        "prunedCode" => pruned_code
+      },
+      "reduction" => %{
+        "tokenSavings" => token_savings,
+        "tokenSavingsPercent" => percentage_savings(origin_token_count, token_savings),
+        "byteSavings" => byte_savings,
+        "byteSavingsPercent" => percentage_savings(producer_byte_count, byte_savings),
+        "lineSavings" => line_savings,
+        "lineSavingsPercent" => percentage_savings(producer_line_count, line_savings)
+      },
+      "prunedCodeChanged" => pruned_code != producer_stdout,
+      "reductionClass" => reduction_class
+    }
+  end
+
+  defp maybe_measure_downstream_codex_impact(repo_root, pruner_url, benchmark_cases, remote_cases) do
+    if truthy_env?(@downstream_env) do
+      workspace_root = Path.dirname(repo_root)
+      issue = downstream_measurement_issue()
+
+      cases_by_id = Map.new(benchmark_cases, fn benchmark_case -> {benchmark_case.id, benchmark_case} end)
+
+      measured_cases =
+        with_measurement_workflow(repo_root, workspace_root, fn ->
+          Enum.map(remote_cases, fn remote_case ->
+            benchmark_case = Map.fetch!(cases_by_id, remote_case["id"])
+
+            measure_downstream_case(
+              repo_root,
+              issue,
+              benchmark_case,
+              remote_case["producerOutput"]["stdout"],
+              remote_case["remoteResponse"]["prunedCode"]
+            )
+          end)
+        end)
+
+      %{
+        "enabled" => true,
+        "prunerEndpoint" => pruner_url,
+        "cases" => measured_cases,
+        "summary" => summarize_downstream_cases(measured_cases)
+      }
+    else
+      %{
+        "enabled" => false,
+        "skipReason" => "Set #{@downstream_env}=1 to run the optional raw-vs-pruned Codex thread-total comparison.",
+        "measurementPromptShape" => "Single-turn prompt that supplies the raw or pruned payload directly and forbids repository inspection or tool use.",
+        "cases" => []
+      }
+    end
+  end
+
+  defp with_measurement_workflow(_repo_root, workspace_root, fun) when is_function(fun, 0) do
+    workflow_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-context-pruner-measure-#{System.unique_integer([:positive])}"
+      )
+
     File.mkdir_p!(workflow_dir)
 
     workflow_path = Path.join(workflow_dir, "WORKFLOW.measurement.md")
     File.write!(workflow_path, measurement_workflow(workspace_root))
-
-    output_path = Path.join(elixir_root, "docs/measurements/idl-1144-context-pruner-token-savings-2026-03-18.json")
-    issue = measurement_issue()
     original_workflow_path = Workflow.workflow_file_path()
 
     try do
       Workflow.set_workflow_file_path(workflow_path)
-
-      baseline_run =
-        run_variant(
-          "baseline",
-          baseline_prompt(repo_root),
-          workspace,
-          issue,
-          %{
-            "PRUNER_URL" => pruner_url,
-            "JEEVES_PRUNER_URL" => "",
-            "PATH" => System.get_env("PATH")
-          }
-        )
-
-      current_run =
-        run_variant(
-          "context_pruner",
-          context_pruner_prompt(repo_root),
-          workspace,
-          issue,
-          %{
-            "PRUNER_URL" => pruner_url,
-            "JEEVES_PRUNER_URL" => "",
-            "PATH" => prepend_to_path(repo_root, System.get_env("PATH"))
-          }
-        )
-
-      remote_verification = verify_remote_pruner(pruner_url, repo_root)
-
-      baseline_total = baseline_run["finalThreadTotal"]["totalTokens"]
-      current_total = current_run["finalThreadTotal"]["totalTokens"]
-      saved_tokens = baseline_total - current_total
-
-      report = %{
-        "capturedAt" => timestamp,
-        "workspace" => workspace,
-        "workspaceRoot" => workspace_root,
-        "baselineWorkflowRef" => @baseline_workflow_ref,
-        "baselineWorkflowShortRef" => baseline_short_head,
-        "currentWorkflowRef" => current_head,
-        "currentWorkflowShortRef" => current_short_head,
-        "codexModelCommand" => @codex_command,
-        "accountingMethod" => %{
-          "authoritativeEvent" => "thread/tokenUsage/updated",
-          "authoritativePayloadPath" => "params.tokenUsage.total",
-          "ignoredFieldsForCumulativeAccounting" => [
-            "params.tokenUsage.last",
-            "TokenCountEvent.info.last_token_usage",
-            "generic usage maps",
-            "turn/completed usage"
-          ]
-        },
-        "comparisonSetup" => %{
-          "workspaceTree" => current_short_head,
-          "baselineGuidanceSource" => "#{@baseline_workflow_ref}:elixir/WORKFLOW.md (pre-context-pruner workflow)",
-          "currentGuidanceSource" => "#{current_short_head}:elixir/WORKFLOW.md (context discovery and reads block)",
-          "taskIssue" => issue_to_map(issue),
-          "notes" => [
-            "Both runs used the same workspace tree at the current checkout head.",
-            "Both runs used the same minimal single-turn measurement scaffold and identical task prompt.",
-            "The baseline variant used ordinary shell-tool guidance with no context-pruner instructions.",
-            "The context-pruner variant added the current workflow's context-pruner guidance so the experiment isolated the context-gathering change instead of ticket-lifecycle behavior.",
-            "For the current run only, PATH was prefixed with the checked-in repo root so `context-pruner` was discoverable the same way a fresh Symphony workspace would expose it after `after_create`."
-          ]
-        },
-        "runs" => [baseline_run, current_run],
-        "comparison" => %{
-          "baselineTotalTokens" => baseline_total,
-          "contextPrunerTotalTokens" => current_total,
-          "absoluteDeltaTokens" => current_total - baseline_total,
-          "absoluteSavingsTokens" => saved_tokens,
-          "percentageDelta" => percentage_delta(baseline_total, current_total - baseline_total),
-          "percentageSavings" => percentage_delta(baseline_total, saved_tokens)
-        },
-        "remoteVerification" => remote_verification
-      }
-
-      File.mkdir_p!(Path.dirname(output_path))
-      File.write!(output_path, Jason.encode!(report, pretty: true))
-      IO.puts(output_path)
+      fun.()
     after
       Workflow.set_workflow_file_path(original_workflow_path)
       File.rm_rf(workflow_dir)
     end
   end
 
-  defp measurement_issue do
+  defp measure_downstream_case(repo_root, issue, benchmark_case, raw_payload, pruned_payload) do
+    raw_variant =
+      run_prompt_variant(
+        "#{benchmark_case.id}_raw",
+        downstream_prompt(repo_root, benchmark_case, raw_payload),
+        repo_root,
+        issue
+      )
+
+    pruned_variant =
+      run_prompt_variant(
+        "#{benchmark_case.id}_pruned",
+        downstream_prompt(repo_root, benchmark_case, pruned_payload),
+        repo_root,
+        issue
+      )
+
+    raw_total = raw_variant["finalThreadTotal"]["totalTokens"]
+    pruned_total = pruned_variant["finalThreadTotal"]["totalTokens"]
+    token_savings = raw_total - pruned_total
+
+    %{
+      "id" => benchmark_case.id,
+      "label" => benchmark_case.label,
+      "producerType" => benchmark_case.producer_type,
+      "query" => benchmark_case.query,
+      "rawVariant" => raw_variant,
+      "prunedVariant" => pruned_variant,
+      "comparison" => %{
+        "rawTotalTokens" => raw_total,
+        "prunedTotalTokens" => pruned_total,
+        "tokenSavings" => token_savings,
+        "percentageSavings" => percentage_savings(raw_total, token_savings)
+      }
+    }
+  end
+
+  defp downstream_measurement_issue do
     %Issue{
-      id: "measurement-context-pruner-token-savings",
-      identifier: "MEASURE-CP-1",
-      title: "Dry-run context gathering measurement",
+      id: "measurement-context-pruner-remote-savings",
+      identifier: "MEASURE-CP-REMOTE-1",
+      title: "Remote pruner downstream token measurement",
       state: "Measurement",
-      url: "https://example.invalid/MEASURE-CP-1",
+      url: "https://example.invalid/MEASURE-CP-REMOTE-1",
       labels: ["measurement", "dry-run"],
       description: """
-      Single-turn dry-run measurement task used only for comparing context discovery token usage.
+      Synthetic single-turn measurement task used only for comparing raw versus pruned downstream token usage.
       """
     }
   end
 
-  defp issue_to_map(%Issue{} = issue) do
-    issue
-    |> Map.from_struct()
-    |> Enum.into(%{}, fn {key, value} -> {Atom.to_string(key), value} end)
+  defp downstream_prompt(repo_root, benchmark_case, supplied_context) do
+    """
+    You are running a synthetic single-turn downstream token measurement inside the repository at `#{repo_root}`.
+
+    Task:
+    - Use only the supplied context block.
+    - Do not inspect the repository.
+    - Do not call tools.
+    - Do not change files.
+    - Answer the question in exactly 3 bullet points and end the turn immediately.
+
+    Local producer type: #{benchmark_case.producer_type}
+    Local producer command: context-pruner #{shell_join(benchmark_case.producer_args)}
+    Question: #{benchmark_case.query}
+
+    Supplied context:
+    ```text
+    #{supplied_context}
+    ```
+    """
   end
 
-  defp run_variant(name, prompt, workspace, issue, env_overrides) do
+  defp run_prompt_variant(name, prompt, workspace, issue) do
     {:ok, collector} = Agent.start_link(fn -> [] end)
-
     start_ms = System.monotonic_time(:millisecond)
 
     result =
-      with_temporary_env(env_overrides, fn ->
-        AppServer.run(
-          workspace,
-          prompt,
-          issue,
-          on_message: fn message ->
-            Agent.update(collector, &[message | &1])
-          end
-        )
-      end)
+      AppServer.run(
+        workspace,
+        prompt,
+        issue,
+        on_message: fn message ->
+          Agent.update(collector, &[message | &1])
+        end
+      )
 
     duration_ms = System.monotonic_time(:millisecond) - start_ms
     messages = Agent.get(collector, &Enum.reverse/1)
@@ -177,64 +429,196 @@ defmodule ContextPrunerTokenSavingsMeasurement do
       "threadTotalSnapshots" => thread_updates,
       "finalThreadTotal" => final_thread_total,
       "turnCompletedUsage" => extract_turn_completed_usage(messages),
-      "commandHints" => extract_command_hints(messages),
-      "usedContextPruner" => used_context_pruner?(messages),
-      "messages" => encode_messages(messages)
+      "commandHints" => extract_command_hints(messages)
     }
   end
 
-  defp verify_remote_pruner(pruner_url, repo_root) do
-    {:ok, _started} = Application.ensure_all_started(:req)
+  defp render_markdown(report) do
+    remote_cases = get_in(report, ["remotePrunerSavings", "cases"])
+    remote_summary = get_in(report, ["remotePrunerSavings", "summary"])
+    downstream_impact = report["downstreamCodexImpact"]
 
-    payload = %{
-      "code" => "function alpha() {}\nfunction beta() {}\nconst target = beta;",
-      "query" => "What mentions beta?"
-    }
+    meaningful_ids = remote_summary["meaningfulReductionCaseIds"]
+    low_or_no_ids = remote_summary["lowOrNoReductionCaseIds"]
 
-    {:ok, response} =
-      Req.post(pruner_url,
-        connect_options: [timeout: @direct_probe_timeout_ms],
-        receive_timeout: @direct_probe_timeout_ms,
-        retry: false,
-        json: payload
+    [
+      "# IDL-1147 Remote Pruner Token Savings Report\n\n",
+      "Captured on #{report["capturedAt"]} from workspace tree `#{report["workspaceTree"]}`.\n\n",
+      "## Scope\n\n",
+      report["benchmarkTarget"]["producerNote"],
+      "\n\n",
+      "Endpoint under test: `#{report["benchmarkTarget"]["endpoint"]}`\n\n",
+      "## Rerun\n\n",
+      "```bash\n",
+      "export PRUNER_URL=...\n",
+      report["rerun"]["defaultCommand"],
+      "\n\n",
+      "# Optional downstream Codex thread-total comparison\n",
+      report["rerun"]["optionalDownstreamCommand"],
+      "\n```\n\n",
+      report["rerun"]["compatibilityAlias"],
+      "\n\n",
+      "The script writes dated JSON and Markdown artifacts under `elixir/docs/measurements/`.\n\n",
+      "## Remote-Pruner Savings\n\n",
+      "| Case | Producer | Origin tokens | Left tokens | Savings | Classification |\n",
+      "| --- | --- | ---: | ---: | ---: | --- |\n",
+      Enum.map_join(remote_cases, "", &render_remote_case_row/1),
+      "\n",
+      "## Observations\n\n",
+      "- Meaningful reduction (`>=20%` token savings in the remote metadata) appeared in: `#{Enum.join(meaningful_ids, "`, `")}`.\n",
+      "- Low or no reduction appeared in: `#{Enum.join(low_or_no_ids, "`, `")}`.\n",
+      "- The deciding factor was not whether the producer was `read` or `grep`; it was how much extra surrounding context still survived in the submitted payload before the remote prune step.\n",
+      "- Already-narrow inputs often came back unchanged, while broader mixed sections or cross-file grep sweeps were where the remote model removed the most text.\n\n",
+      "## Case Details\n\n",
+      Enum.map_join(remote_cases, "\n", &render_remote_case_details/1),
+      render_downstream_markdown(downstream_impact),
+      "## Artifacts\n\n",
+      "- JSON artifact: `#{report["artifacts"]["jsonPath"]}`\n",
+      "- Markdown artifact: `#{report["artifacts"]["markdownPath"]}`\n",
+      "- Measurement script: `#{report["artifacts"]["scriptPath"]}`\n"
+    ]
+    |> IO.iodata_to_binary()
+  end
+
+  defp render_remote_case_row(remote_case) do
+    origin_token_count = get_in(remote_case, ["remoteResponse", "originTokenCount"])
+    left_token_count = get_in(remote_case, ["remoteResponse", "leftTokenCount"])
+    token_savings = get_in(remote_case, ["reduction", "tokenSavings"])
+
+    "| `#{remote_case["id"]}` | `#{remote_case["producerType"]}` | #{display_metric(origin_token_count)} | #{display_metric(left_token_count)} | #{display_signed_metric(token_savings)} | `#{remote_case["reductionClass"]}` |\n"
+  end
+
+  defp render_remote_case_details(remote_case) do
+    [
+      "### `#{remote_case["id"]}`\n\n",
+      "- Label: #{remote_case["label"]}\n",
+      "- Producer command: `#{remote_case["producerCommand"]}`\n",
+      "- Query: `#{remote_case["query"]}`\n",
+      "- Breakpoint note: #{remote_case["breakpointNote"]}\n",
+      "- Producer payload: #{get_in(remote_case, ["producerOutput", "byteCount"])} bytes, #{get_in(remote_case, ["producerOutput", "lineCount"])} lines\n",
+      "- Remote metadata: `origin_token_cnt=#{display_metric(get_in(remote_case, ["remoteResponse", "originTokenCount"]))}`, `left_token_cnt=#{display_metric(get_in(remote_case, ["remoteResponse", "leftTokenCount"]))}`, `model_input_token_cnt=#{display_metric(get_in(remote_case, ["remoteResponse", "modelInputTokenCount"]))}`\n",
+      "- Reduction: #{display_signed_metric(get_in(remote_case, ["reduction", "tokenSavings"]))} tokens (#{display_percent(get_in(remote_case, ["reduction", "tokenSavingsPercent"]))}), #{display_signed_metric(get_in(remote_case, ["reduction", "byteSavings"]))} bytes (#{display_percent(get_in(remote_case, ["reduction", "byteSavingsPercent"]))})\n",
+      "- Response keys: `#{Enum.join(get_in(remote_case, ["remoteResponse", "responseKeys"]), "`, `")}`\n\n",
+      "Pruned output excerpt:\n\n",
+      "```text\n",
+      excerpt(get_in(remote_case, ["remoteResponse", "prunedCode"]), 600),
+      "\n```\n"
+    ]
+  end
+
+  defp render_downstream_markdown(%{"enabled" => false} = downstream_impact) do
+    [
+      "\n## Optional Downstream Codex Impact\n\n",
+      downstream_impact["skipReason"],
+      "\n\n",
+      downstream_impact["measurementPromptShape"],
+      "\n\n"
+    ]
+  end
+
+  defp render_downstream_markdown(%{"enabled" => true} = downstream_impact) do
+    cases = downstream_impact["cases"]
+
+    [
+      "\n## Optional Downstream Codex Impact\n\n",
+      "This layer compared raw versus pruned payloads by supplying the same context directly to Codex in a single-turn prompt.\n\n",
+      "| Case | Raw total | Pruned total | Savings |\n",
+      "| --- | ---: | ---: | ---: |\n",
+      Enum.map_join(cases, "", fn downstream_case ->
+        comparison = downstream_case["comparison"]
+
+        "| `#{downstream_case["id"]}` | #{comparison["rawTotalTokens"]} | #{comparison["prunedTotalTokens"]} | #{display_signed_metric(comparison["tokenSavings"])} |\n"
+      end),
+      "\n"
+    ]
+  end
+
+  defp summarize_remote_cases(remote_cases) do
+    meaningful_reduction_ids =
+      remote_cases
+      |> Enum.filter(&(&1["reductionClass"] == "meaningful"))
+      |> Enum.map(& &1["id"])
+
+    low_or_no_reduction_ids =
+      remote_cases
+      |> Enum.reject(&(&1["reductionClass"] == "meaningful"))
+      |> Enum.map(& &1["id"])
+
+    largest_case =
+      Enum.max_by(
+        remote_cases,
+        fn remote_case -> get_in(remote_case, ["reduction", "tokenSavings"]) || -1 end,
+        fn -> nil end
       )
 
-    body = response.body
+    %{
+      "caseCount" => length(remote_cases),
+      "meaningfulReductionCaseIds" => meaningful_reduction_ids,
+      "lowOrNoReductionCaseIds" => low_or_no_reduction_ids,
+      "largestTokenSavingsCaseId" => if(largest_case, do: largest_case["id"], else: nil)
+    }
+  end
 
-    cli_result =
-      with_temporary_env(%{"PRUNER_URL" => pruner_url, "JEEVES_PRUNER_URL" => ""}, fn ->
-        CLI.evaluate([
-          "read",
-          "--file-path",
-          Path.join(repo_root, "elixir/docs/context_pruner.md"),
-          "--around-line",
-          "49",
-          "--radius",
-          "6",
-          "--focus",
-          "Keep only the env contract and the primary response field."
-        ])
-      end)
+  defp summarize_downstream_cases(downstream_cases) do
+    total_token_savings =
+      downstream_cases
+      |> Enum.map(fn downstream_case -> get_in(downstream_case, ["comparison", "tokenSavings"]) || 0 end)
+      |> Enum.sum()
 
     %{
-      "endpoint" => pruner_url,
-      "requestPayloadShape" => payload,
-      "httpStatus" => response.status,
-      "responseKeys" => body |> Map.keys() |> Enum.sort(),
-      "primaryResponseField" => "pruned_code",
-      "primaryResponseFieldPresent" => is_binary(body["pruned_code"]),
-      "responseExcerpt" => %{
-        "pruned_code" => body["pruned_code"],
-        "origin_token_cnt" => body["origin_token_cnt"],
-        "left_token_cnt" => body["left_token_cnt"],
-        "model_input_token_cnt" => body["model_input_token_cnt"]
-      },
-      "cliFocusVerification" => %{
-        "exitCode" => cli_result.exit_code,
-        "stderr" => cli_result.stderr,
-        "stdout" => cli_result.stdout
-      }
+      "caseCount" => length(downstream_cases),
+      "aggregateTokenSavings" => total_token_savings
     }
+  end
+
+  defp extract_pruned_code!(body, case_id) when is_map(body) do
+    case Map.get(body, "pruned_code") do
+      value when is_binary(value) ->
+        value
+
+      _ ->
+        raise "Remote pruner response for #{case_id} did not include a string pruned_code field."
+    end
+  end
+
+  defp response_keys(body) when is_map(body) do
+    body
+    |> Map.keys()
+    |> Enum.map(&to_string/1)
+    |> Enum.sort()
+  end
+
+  defp reduction_class(token_savings, origin_token_count, byte_savings, producer_byte_count) do
+    cond do
+      meaningful_savings?(token_savings, origin_token_count) ->
+        "meaningful"
+
+      positive_savings?(token_savings) or meaningful_savings?(byte_savings, producer_byte_count) ->
+        "limited"
+
+      true ->
+        "none"
+    end
+  end
+
+  defp meaningful_savings?(savings, base)
+       when is_integer(savings) and is_integer(base) and base > 0 do
+    savings >= 0 and savings / base >= 0.20
+  end
+
+  defp meaningful_savings?(_, _), do: false
+
+  defp positive_savings?(value) when is_integer(value), do: value > 0
+  defp positive_savings?(_value), do: false
+
+  defp truthy_env?(name) do
+    case System.get_env(name) do
+      value when is_binary(value) ->
+        String.downcase(String.trim(value)) in ["1", "true", "yes", "on"]
+
+      _ ->
+        false
+    end
   end
 
   defp with_temporary_env(overrides, fun) when is_function(fun, 0) do
@@ -332,9 +716,9 @@ defmodule ContextPrunerTokenSavingsMeasurement do
     payload_path_segments(payload, [first | rest])
   end
 
-  defp payload_path(_message, []), do: nil
-
-  defp payload_path_segments(current, []), do: current
+  defp payload_path_segments(current, []) do
+    current
+  end
 
   defp payload_path_segments(current, [segment | rest]) when is_map(current) do
     case Map.get(current, segment) || maybe_get_existing_atom_key(current, segment) do
@@ -395,25 +779,18 @@ defmodule ContextPrunerTokenSavingsMeasurement do
     current ++ Enum.flat_map(Map.values(value), &collect_command_strings/1)
   end
 
-  defp collect_command_strings(value) when is_list(value), do: Enum.flat_map(value, &collect_command_strings/1)
-  defp collect_command_strings(_value), do: []
-
-  defp used_context_pruner?(messages) do
-    messages
-    |> extract_command_hints()
-    |> Enum.any?(fn command ->
-      String.starts_with?(command, "context-pruner ") or
-        String.contains?(command, "-lc \"context-pruner ") or
-        String.contains?(command, "-lc 'context-pruner ")
-    end)
+  defp collect_command_strings(value) when is_list(value) do
+    Enum.flat_map(value, &collect_command_strings/1)
   end
 
-  defp encode_messages(messages) do
-    Enum.map(messages, fn message ->
-      message
-      |> normalize_term()
-      |> maybe_limit_raw()
-    end)
+  defp collect_command_strings(_value), do: []
+
+  defp normalize_run_result({:ok, result}) when is_map(result) do
+    %{"status" => "ok", "result" => normalize_term(result)}
+  end
+
+  defp normalize_run_result({:error, reason}) do
+    %{"status" => "error", "reason" => inspect(reason)}
   end
 
   defp normalize_term(%DateTime{} = value), do: DateTime.to_iso8601(value)
@@ -431,74 +808,78 @@ defmodule ContextPrunerTokenSavingsMeasurement do
   end
 
   defp normalize_term(value) when is_list(value), do: Enum.map(value, &normalize_term/1)
+  defp normalize_term(value) when is_binary(value), do: sanitize_text(value)
   defp normalize_term(value), do: value
 
-  defp maybe_limit_raw(%{"raw" => raw} = message) when is_binary(raw) and byte_size(raw) > 5_000 do
-    Map.put(message, "raw", String.slice(raw, 0, 5_000) <> "\n(truncated)")
-  end
+  defp maybe_integer(value) when is_integer(value), do: value
 
-  defp maybe_limit_raw(message), do: message
-
-  defp normalize_run_result({:ok, result}) when is_map(result) do
-    %{"status" => "ok", "result" => normalize_term(result)}
-  end
-
-  defp normalize_run_result({:error, reason}) do
-    %{"status" => "error", "reason" => inspect(reason)}
-  end
-
-  defp prepend_to_path(prefix, current_path) when is_binary(current_path) and current_path != "" do
-    prefix <> ":" <> current_path
-  end
-
-  defp prepend_to_path(prefix, _current_path), do: prefix
-
-  defp pruner_url do
-    case System.get_env("PRUNER_URL") || System.get_env("JEEVES_PRUNER_URL") do
-      value when is_binary(value) and value != "" -> value
-      _ -> @default_pruner_url
+  defp maybe_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} -> parsed
+      _ -> nil
     end
   end
 
-  defp inject_measurement_override(workflow_content) when is_binary(workflow_content) do
-    lines = String.split(workflow_content, ~r/\R/, trim: false)
+  defp maybe_integer(_value), do: nil
 
-    case lines do
-      ["---" | tail] ->
-        {front_matter, rest} = Enum.split_while(tail, &(&1 != "---"))
+  defp subtract_if_present(left, right) when is_integer(left) and is_integer(right), do: left - right
+  defp subtract_if_present(_left, _right), do: nil
 
-        case rest do
-          ["---" | prompt_lines] ->
-            Enum.join(
-              ["---" | front_matter] ++
-                [
-                  "---",
-                  "",
-                  measurement_override_prompt(),
-                  ""
-                ] ++ prompt_lines,
-              "\n"
-            )
+  defp percentage_savings(base, savings) when is_integer(base) and is_integer(savings) and base > 0 do
+    Float.round(savings / base * 100.0, 2)
+  end
 
-          _ ->
-            measurement_override_prompt() <> "\n\n" <> workflow_content
-        end
+  defp percentage_savings(_base, _savings), do: nil
 
-      _ ->
-        measurement_override_prompt() <> "\n\n" <> workflow_content
+  defp line_count(text) when text in [nil, ""], do: 0
+
+  defp line_count(text) when is_binary(text) do
+    text
+    |> String.split(~r/\r\n|\n|\r/, trim: false)
+    |> drop_trailing_empty_line()
+    |> length()
+  end
+
+  defp drop_trailing_empty_line(lines) do
+    case Enum.reverse(lines) do
+      ["" | rest] -> Enum.reverse(rest)
+      _ -> lines
     end
   end
 
-  defp measurement_override_prompt do
-    """
-    Synthetic measurement override:
+  defp display_metric(nil), do: "n/a"
+  defp display_metric(value), do: Integer.to_string(value)
 
-    - This prompt is being executed only to measure repository-context token usage.
-    - Do not use `linear_graphql`.
-    - Skip workpad maintenance, issue state changes, PR handling, review flow, and any other tracker lifecycle steps.
-    - Inspect repository files and shell output only as needed to answer the ticket description.
-    - End the turn immediately after a short Markdown answer to the ticket description.
-    """
+  defp display_signed_metric(nil), do: "n/a"
+  defp display_signed_metric(value) when value >= 0, do: "+" <> Integer.to_string(value)
+  defp display_signed_metric(value), do: Integer.to_string(value)
+
+  defp display_percent(nil), do: "n/a"
+  defp display_percent(value), do: "#{value}%"
+
+  defp excerpt(text, max_bytes) when is_binary(text) do
+    text = sanitize_text(text)
+
+    if byte_size(text) <= max_bytes do
+      text
+    else
+      binary_part(text, 0, max_bytes) <> "\n(truncated)"
+    end
+  end
+
+  defp sanitize_text(value) when is_binary(value), do: String.replace_invalid(value, "�")
+  defp sanitize_text(value), do: value
+
+  defp shell_join(argv) do
+    Enum.map_join(argv, " ", &shell_escape/1)
+  end
+
+  defp shell_escape(value) when is_binary(value) do
+    if Regex.match?(~r|^[A-Za-z0-9_@%+=:,./-]+$|, value) do
+      value
+    else
+      "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
+    end
   end
 
   defp measurement_workflow(workspace_root) do
@@ -519,67 +900,6 @@ defmodule ContextPrunerTokenSavingsMeasurement do
     ---
     measurement
     """
-  end
-
-  defp baseline_prompt(repo_root) do
-    """
-    You are running a synthetic single-turn measurement inside the repository at `#{repo_root}`.
-
-    Task:
-    - Inspect the repository only.
-    - Do not use `linear_graphql`.
-    - Do not change files.
-    - Do not send progress updates or plans.
-    - Use at most 3 shell commands total.
-    - Use ordinary shell tools such as `rg`, `sed`, and short `bash` commands when you need context.
-    - Keep reads and searches narrow.
-    - Answer in exactly 4 bullet points and end the turn immediately afterward.
-
-    Questions:
-    - Bullet 1: the authoritative cumulative token event and payload path.
-    - Bullet 2: the delta or generic usage fields to ignore.
-    - Bullet 3: the preferred context-pruner environment variable and compatibility alias.
-    - Bullet 4: the remote prune request payload shape and primary response field.
-    """
-  end
-
-  defp context_pruner_prompt(repo_root) do
-    """
-    You are running a synthetic single-turn measurement inside the repository at `#{repo_root}`.
-
-    Task:
-    - Inspect the repository only.
-    - Do not use `linear_graphql`.
-    - Do not change files.
-    - Do not send progress updates or plans.
-    - Use at most 3 shell commands total.
-    - Prefer `context-pruner` before broad `cat`, `sed`, `rg`, or ad hoc shell output when you need repository context.
-    - Start with the narrowest command that can answer the question:
-      - `context-pruner read --file-path <path> --start-line <n> --end-line <n>` or `--around-line <n> --radius <n>` for known files.
-      - `context-pruner grep --pattern <regex> --path <path> --context-lines <n> --max-matches <n>` for bounded search.
-      - `context-pruner bash --command "<command>"` only when the answer must come from shell output rather than directly from files.
-    - Add `--focus` only after the file window, search path, and match counts are already narrow enough that pruning has a clear target.
-    - Prefer `PRUNER_URL`; use `JEEVES_PRUNER_URL` only as a compatibility alias when `PRUNER_URL` is unset.
-    - Answer in exactly 4 bullet points and end the turn immediately afterward.
-
-    Questions:
-    - Bullet 1: the authoritative cumulative token event and payload path.
-    - Bullet 2: the delta or generic usage fields to ignore.
-    - Bullet 3: the preferred context-pruner environment variable and compatibility alias.
-    - Bullet 4: the remote prune request payload shape and primary response field.
-    """
-  end
-
-  defp percentage_delta(0, _value), do: nil
-
-  defp percentage_delta(base, value) when is_integer(base) and is_integer(value) do
-    Float.round(value / base * 100.0, 2)
-  end
-
-  defp line_count(text) when is_binary(text) do
-    text
-    |> String.split(~r/\R/, trim: false)
-    |> length()
   end
 
   defp git_output!(repo_root, args) do

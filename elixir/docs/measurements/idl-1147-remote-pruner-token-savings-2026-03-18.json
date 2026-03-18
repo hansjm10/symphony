@@ -1,0 +1,301 @@
+{
+  "artifacts": {
+    "jsonPath": "elixir/docs/measurements/idl-1147-remote-pruner-token-savings-2026-03-18.json",
+    "markdownPath": "elixir/docs/measurements/idl-1147-remote-pruner-token-savings-2026-03-18.md",
+    "scriptPath": "elixir/scripts/measure_context_pruner_token_savings.exs"
+  },
+  "benchmarkTarget": {
+    "endpoint": "http://192.168.1.15:8000/prune",
+    "name": "remote_pruner_payload_reduction",
+    "producerNote": "Local `context-pruner read` and `context-pruner grep` commands only produced the submitted payloads. The benchmark target is the remote transformation applied to the same `{code, query}` input.",
+    "prunerConfigWarnings": [],
+    "requestShape": {
+      "code": "...",
+      "query": "..."
+    }
+  },
+  "capturedAt": "2026-03-18T14:07:28Z",
+  "downstreamCodexImpact": {
+    "cases": [],
+    "enabled": false,
+    "measurementPromptShape": "Single-turn prompt that supplies the raw or pruned payload directly and forbids repository inspection or tool use.",
+    "skipReason": "Set MEASURE_CONTEXT_PRUNER_INCLUDE_CODEX=1 to run the optional raw-vs-pruned Codex thread-total comparison."
+  },
+  "measurementId": "IDL-1147",
+  "remotePrunerSavings": {
+    "cases": [
+      {
+        "breakpointNote": "This window is already query-shaped, so the remote pruner should only help if it can still trim line-number noise or section framing.",
+        "id": "file_window_small_env_contract",
+        "label": "Small env-contract file window",
+        "producerCommand": "context-pruner read --file-path elixir/docs/context_pruner.md --around-line 49 --radius 6",
+        "producerOutput": {
+          "byteCount": 263,
+          "exitCode": 0,
+          "lineCount": 13,
+          "stderr": "",
+          "stdout": "43: content enters model context.\n44: \n45: ## Pruner environment contract\n46: \n47: Primary variables:\n48: \n49: - `PRUNER_URL`\n50: - `PRUNER_TIMEOUT_MS`\n51: \n52: Compatibility alias:\n53: \n54: - `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\n55: \n"
+        },
+        "producerType": "file_window",
+        "prunedCodeChanged": true,
+        "query": "Keep only the env contract and alias behavior.",
+        "reduction": {
+          "byteSavings": 1,
+          "byteSavingsPercent": 0.38,
+          "lineSavings": 0,
+          "lineSavingsPercent": 0.0,
+          "tokenSavings": 0,
+          "tokenSavingsPercent": 0.0
+        },
+        "reductionClass": "none",
+        "remoteResponse": {
+          "errorMessage": null,
+          "httpStatus": 200,
+          "keptFrags": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13
+          ],
+          "leftTokenCount": 100,
+          "modelInputTokenCount": 181,
+          "originTokenCount": 100,
+          "prunedCode": "43: content enters model context.\n44: \n45: ## Pruner environment contract\n46: \n47: Primary variables:\n48: \n49: - `PRUNER_URL`\n50: - `PRUNER_TIMEOUT_MS`\n51: \n52: Compatibility alias:\n53: \n54: - `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\n55: ",
+          "responseKeys": [
+            "error_msg",
+            "kept_frags",
+            "left_token_cnt",
+            "model_input_token_cnt",
+            "origin_token_cnt",
+            "pruned_code",
+            "score",
+            "token_scores"
+          ],
+          "score": 0.9549844264984131
+        }
+      },
+      {
+        "breakpointNote": "This wider file window mixes examples, env guidance, request shape, and exit-code details, so it should show whether the remote pruner can strip surrounding sections.",
+        "id": "file_window_mixed_contract_section",
+        "label": "Broader contract section file window",
+        "producerCommand": "context-pruner read --file-path elixir/docs/context_pruner.md --start-line 35 --end-line 77",
+        "producerOutput": {
+          "byteCount": 1679,
+          "exitCode": 0,
+          "lineCount": 43,
+          "stderr": "",
+          "stdout": "35: ```bash\n36: context-pruner read --file-path path/to/file.ex --start-line 10 --end-line 30\n37: context-pruner read --file-path path/to/file.ex --around-line 120 --radius 12\n38: context-pruner grep --pattern \"context-pruner\" --path elixir/lib --context-lines 2 --max-matches 40\n39: context-pruner bash --command \"git status --short\"\n40: ```\n41: \n42: Add `--focus \"<question>\"` to any command to request remote pruning before the\n43: content enters model context.\n44: \n45: ## Pruner environment contract\n46: \n47: Primary variables:\n48: \n49: - `PRUNER_URL`\n50: - `PRUNER_TIMEOUT_MS`\n51: \n52: Compatibility alias:\n53: \n54: - `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\n55: \n56: Timeout defaults to `30000` ms and is clamped to `100..300000`.\n57: \n58: If pruning is disabled or the remote call fails, the CLI falls back to the\n59: original unpruned output and emits a warning on stderr.\n60: \n61: ## Verified request and response shape\n62: \n63: Verified on 2026-03-18 against the remote service referenced in\n64: `/work/jeeves/.env`:\n65: \n66: - endpoint: `http://192.168.1.15:8000/prune`\n67: - request body: `{ \"code\": \"...\", \"query\": \"...\" }`\n68: - primary response field: `pruned_code`\n69: \n70: Symphony also accepts `content` or `text` as compatibility fallbacks, but the\n71: documented primary contract is `pruned_code`.\n72: \n73: ## Exit codes\n74: \n75: - `read`: `0` success, `1` file/runtime failure, `2` invalid CLI arguments\n76: - `grep`: `0` matches found, `1` no matches, `2` invalid regex or filesystem/runtime failure\n77: - `bash`: child exit code when the command runs, `1` launcher/runtime failure, `2` invalid CLI arguments, `127` no usable shell\n"
+        },
+        "producerType": "file_window",
+        "prunedCodeChanged": true,
+        "query": "Keep only the env contract, compatibility alias, request body, and primary response field.",
+        "reduction": {
+          "byteSavings": 1007,
+          "byteSavingsPercent": 59.98,
+          "lineSavings": 19,
+          "lineSavingsPercent": 44.19,
+          "tokenSavings": 323,
+          "tokenSavingsPercent": 56.57
+        },
+        "reductionClass": "meaningful",
+        "remoteResponse": {
+          "errorMessage": null,
+          "httpStatus": 200,
+          "keptFrags": [
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            26,
+            27,
+            28,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37
+          ],
+          "leftTokenCount": 248,
+          "modelInputTokenCount": 660,
+          "originTokenCount": 571,
+          "prunedCode": "(filtered 12 lines)\n47: Primary variables:\n48: \n49: - `PRUNER_URL`\n50: - `PRUNER_TIMEOUT_MS`\n51: \n52: Compatibility alias:\n53: \n54: - `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\n55: \n56: Timeout defaults to `30000` ms and is clamped to `100..300000`.\n57: \n(filtered 2 lines)\n60: \n61: ## Verified request and response shape\n62: \n(filtered 3 lines)\n66: - endpoint: `http://192.168.1.15:8000/prune`\n67: - request body: `{ \"code\": \"...\", \"query\": \"...\" }`\n68: - primary response field: `pruned_code`\n69: \n70: Symphony also accepts `content` or `text` as compatibility fallbacks, but the\n71: documented primary contract is `pruned_code`.\n(filtered 6 lines)",
+          "responseKeys": [
+            "error_msg",
+            "kept_frags",
+            "left_token_cnt",
+            "model_input_token_cnt",
+            "origin_token_cnt",
+            "pruned_code",
+            "score",
+            "token_scores"
+          ],
+          "score": 0.9161096215248108
+        }
+      },
+      {
+        "breakpointNote": "This grep is already concentrated on the exact remote-verification terms, so it should reveal when the remote pruner has little left to remove.",
+        "id": "search_result_remote_metadata_cluster",
+        "label": "Already-clustered metadata grep",
+        "producerCommand": "context-pruner grep --pattern 'origin_token_cnt|left_token_cnt|model_input_token_cnt|pruned_code|JEEVES_PRUNER_URL|PRUNER_URL' --path elixir/docs --context-lines 2 --max-matches 20",
+        "producerOutput": {
+          "byteCount": 1165,
+          "exitCode": 0,
+          "lineCount": 21,
+          "stderr": "",
+          "stdout": "elixir/docs/context_pruner.md-47-Primary variables:\nelixir/docs/context_pruner.md-48-\nelixir/docs/context_pruner.md:49:- `PRUNER_URL`\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\nelixir/docs/context_pruner.md-52-Compatibility alias:\nelixir/docs/context_pruner.md-53-\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n--\nelixir/docs/context_pruner.md-66-- endpoint: `http://192.168.1.15:8000/prune`\nelixir/docs/context_pruner.md-67-- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\nelixir/docs/context_pruner.md-73-## Exit codes\nelixir/docs/context_pruner_token_savings_report.md-69-```\n(truncated 347 lines)"
+        },
+        "producerType": "search_result",
+        "prunedCodeChanged": false,
+        "query": "Keep only the remote verification metadata and what it proved.",
+        "reduction": {
+          "byteSavings": 0,
+          "byteSavingsPercent": 0.0,
+          "lineSavings": 0,
+          "lineSavingsPercent": 0.0,
+          "tokenSavings": 0,
+          "tokenSavingsPercent": 0.0
+        },
+        "reductionClass": "none",
+        "remoteResponse": {
+          "errorMessage": null,
+          "httpStatus": 200,
+          "keptFrags": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21
+          ],
+          "leftTokenCount": 376,
+          "modelInputTokenCount": 459,
+          "originTokenCount": 376,
+          "prunedCode": "elixir/docs/context_pruner.md-47-Primary variables:\nelixir/docs/context_pruner.md-48-\nelixir/docs/context_pruner.md:49:- `PRUNER_URL`\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\nelixir/docs/context_pruner.md-52-Compatibility alias:\nelixir/docs/context_pruner.md-53-\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n--\nelixir/docs/context_pruner.md-66-- endpoint: `http://192.168.1.15:8000/prune`\nelixir/docs/context_pruner.md-67-- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\nelixir/docs/context_pruner.md-73-## Exit codes\nelixir/docs/context_pruner_token_savings_report.md-69-```\n(truncated 347 lines)",
+          "responseKeys": [
+            "error_msg",
+            "kept_frags",
+            "left_token_cnt",
+            "model_input_token_cnt",
+            "origin_token_cnt",
+            "pruned_code",
+            "score",
+            "token_scores"
+          ],
+          "score": 0.0015367271844297647
+        }
+      },
+      {
+        "breakpointNote": "This grep stays inside the docs subtree but still mixes env guidance, request-shape text, and remote score metadata, so it should show whether the remote pruner can isolate just the request/response contract.",
+        "id": "search_result_docs_remote_contract_mix",
+        "label": "Docs-only remote-contract grep",
+        "producerCommand": "context-pruner grep --pattern 'PRUNER_URL|JEEVES_PRUNER_URL|pruned_code|request body|query|token_scores|kept_frags' --path elixir/docs --context-lines 2 --max-matches 20",
+        "producerOutput": {
+          "byteCount": 1141,
+          "exitCode": 0,
+          "lineCount": 21,
+          "stderr": "",
+          "stdout": "elixir/docs/context_pruner.md-47-Primary variables:\nelixir/docs/context_pruner.md-48-\nelixir/docs/context_pruner.md:49:- `PRUNER_URL`\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\nelixir/docs/context_pruner.md-52-Compatibility alias:\nelixir/docs/context_pruner.md-53-\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n--\nelixir/docs/context_pruner.md-65-\nelixir/docs/context_pruner.md-66-- endpoint: `http://192.168.1.15:8000/prune`\nelixir/docs/context_pruner.md:67:- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\nelixir/docs/context_pruner.md-73-## Exit codes\n(truncated 449 lines)"
+        },
+        "producerType": "search_result",
+        "prunedCodeChanged": true,
+        "query": "Keep only the remote request shape and primary response field.",
+        "reduction": {
+          "byteSavings": 330,
+          "byteSavingsPercent": 28.92,
+          "lineSavings": 6,
+          "lineSavingsPercent": 28.57,
+          "tokenSavings": 118,
+          "tokenSavingsPercent": 31.89
+        },
+        "reductionClass": "meaningful",
+        "remoteResponse": {
+          "errorMessage": null,
+          "httpStatus": 200,
+          "keptFrags": [
+            4,
+            5,
+            8,
+            9,
+            10,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "leftTokenCount": 252,
+          "modelInputTokenCount": 453,
+          "originTokenCount": 370,
+          "prunedCode": "(filtered 3 lines)\nelixir/docs/context_pruner.md-50-- `PRUNER_TIMEOUT_MS`\nelixir/docs/context_pruner.md-51-\n(filtered 2 lines)\nelixir/docs/context_pruner.md:54:- `JEEVES_PRUNER_URL` is accepted only when `PRUNER_URL` is unset.\nelixir/docs/context_pruner.md-55-\nelixir/docs/context_pruner.md-56-Timeout defaults to `30000` ms and is clamped to `100..300000`.\n(filtered 3 lines)\nelixir/docs/context_pruner.md:67:- request body: `{ \"code\": \"...\", \"query\": \"...\" }`\nelixir/docs/context_pruner.md:68:- primary response field: `pruned_code`\nelixir/docs/context_pruner.md-69-\nelixir/docs/context_pruner.md-70-Symphony also accepts `content` or `text` as compatibility fallbacks, but the\nelixir/docs/context_pruner.md:71:documented primary contract is `pruned_code`.\nelixir/docs/context_pruner.md-72-\n(filtered 2 lines)",
+          "responseKeys": [
+            "error_msg",
+            "kept_frags",
+            "left_token_cnt",
+            "model_input_token_cnt",
+            "origin_token_cnt",
+            "pruned_code",
+            "score",
+            "token_scores"
+          ],
+          "score": 0.04535258188843727
+        }
+      }
+    ],
+    "summary": {
+      "caseCount": 4,
+      "largestTokenSavingsCaseId": "file_window_mixed_contract_section",
+      "lowOrNoReductionCaseIds": [
+        "file_window_small_env_contract",
+        "search_result_remote_metadata_cluster"
+      ],
+      "meaningfulReductionCaseIds": [
+        "file_window_mixed_contract_section",
+        "search_result_docs_remote_contract_mix"
+      ]
+    }
+  },
+  "rerun": {
+    "compatibilityAlias": "JEEVES_PRUNER_URL is accepted only when PRUNER_URL is unset.",
+    "defaultCommand": "cd elixir && mise exec -- mix run --no-start scripts/measure_context_pruner_token_savings.exs",
+    "optionalDownstreamCommand": "cd elixir && MEASURE_CONTEXT_PRUNER_INCLUDE_CODEX=1 mise exec -- mix run --no-start scripts/measure_context_pruner_token_savings.exs",
+    "requiredEnv": [
+      "PRUNER_URL"
+    ]
+  },
+  "workspace": "/home/jordan/code/symphony-workspaces/IDL-1147",
+  "workspaceTree": "1b57342",
+  "workspaceTreeRef": "1b57342effc46f8bf5f17abe59146ff1f28e8f33"
+}
