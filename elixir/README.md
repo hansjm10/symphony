@@ -79,6 +79,7 @@ Optional flags:
 
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
 - `--port` also starts the Phoenix observability service (default: disabled)
+- `--host` overrides the dashboard bind host (default: `127.0.0.1`)
 
 The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
 Codex session prompt.
@@ -150,6 +151,8 @@ codex:
   reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
+- The dashboard binds `127.0.0.1` by default. Set `server.host: 0.0.0.0` in `WORKFLOW.md` or pass
+  `--host 0.0.0.0` to expose it on your LAN.
 
 ## Web dashboard
 

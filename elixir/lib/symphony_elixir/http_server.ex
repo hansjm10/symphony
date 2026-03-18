@@ -20,7 +20,7 @@ defmodule SymphonyElixir.HttpServer do
   def start_link(opts \\ []) do
     case Keyword.get(opts, :port, Config.server_port()) do
       port when is_integer(port) and port >= 0 ->
-        host = Keyword.get(opts, :host, Config.settings!().server.host)
+        host = Keyword.get(opts, :host, Config.server_host())
         orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
@@ -78,7 +78,7 @@ defmodule SymphonyElixir.HttpServer do
     end
   end
 
-  defp normalize_host(host) when host in ["", nil], do: "127.0.0.1"
+  defp normalize_host(host) when host in ["", nil], do: Config.server_host()
   defp normalize_host(host) when is_binary(host), do: host
   defp normalize_host(host), do: to_string(host)
 

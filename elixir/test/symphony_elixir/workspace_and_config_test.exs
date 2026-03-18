@@ -883,6 +883,24 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.settings!().codex.command == "codex app-server"
   end
 
+  test "server host uses the workflow value unless a runtime override is set" do
+    previous_host_override = Application.get_env(:symphony_elixir, :server_host_override)
+
+    on_exit(fn ->
+      if is_nil(previous_host_override) do
+        Application.delete_env(:symphony_elixir, :server_host_override)
+      else
+        Application.put_env(:symphony_elixir, :server_host_override, previous_host_override)
+      end
+    end)
+
+    write_workflow_file!(Workflow.workflow_file_path(), server_host: "0.0.0.0")
+    assert Config.server_host() == "0.0.0.0"
+
+    Application.put_env(:symphony_elixir, :server_host_override, "192.168.1.44")
+    assert Config.server_host() == "192.168.1.44"
+  end
+
   test "config resolves $VAR references for env-backed secret and path values" do
     workspace_env_var = "SYMP_WORKSPACE_ROOT_#{System.unique_integer([:positive])}"
     api_key_env_var = "SYMP_LINEAR_API_KEY_#{System.unique_integer([:positive])}"

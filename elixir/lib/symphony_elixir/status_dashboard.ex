@@ -430,7 +430,7 @@ defmodule SymphonyElixir.StatusDashboard do
   defp linear_project_url(project_slug), do: "https://linear.app/project/#{project_slug}/issues"
 
   defp dashboard_url do
-    dashboard_url(Config.settings!().server.host, Config.server_port(), HttpServer.bound_port())
+    dashboard_url(Config.server_host(), Config.server_port(), HttpServer.bound_port())
   end
 
   defp dashboard_url(_host, nil, _bound_port), do: nil
@@ -445,13 +445,13 @@ defmodule SymphonyElixir.StatusDashboard do
     end
   end
 
-  defp dashboard_url_host(host) when host in ["0.0.0.0", "::", "[::]", ""], do: "127.0.0.1"
+  defp dashboard_url_host(host) when host in ["", nil], do: "127.0.0.1"
 
   defp dashboard_url_host(host) when is_binary(host) do
     trimmed_host = String.trim(host)
 
     cond do
-      trimmed_host in ["0.0.0.0", "::", "[::]", ""] ->
+      trimmed_host == "" ->
         "127.0.0.1"
 
       String.starts_with?(trimmed_host, "[") and String.ends_with?(trimmed_host, "]") ->
