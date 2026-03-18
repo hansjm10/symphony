@@ -194,6 +194,8 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   @doc false
+  @spec local_port_command_for_test(String.t(), term()) ::
+          {:ok, Path.t(), [String.t()]} | {:error, :cmd_not_found | :bash_not_found}
   def local_port_command_for_test(command, os_type), do: local_port_command(command, os_type)
 
   defp start_port(workspace, nil, opts) do
