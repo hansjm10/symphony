@@ -113,8 +113,10 @@ defmodule SymphonyElixir.CoreTest do
     assert Map.get(hooks, "before_remove") |> Map.get("sh") =~ "cd elixir && mise exec -- mix workspace.before_remove"
     assert Map.get(hooks, "before_remove") |> Map.get("pwsh") =~ "mix workspace.before_remove"
 
-    assert Map.get(config, "codex", %{}) |> Map.get("command") =~
-             "PATH=\"$HOME/.local/bin:$PATH\" codex"
+    codex_command = Map.get(config, "codex", %{}) |> Map.get("command")
+    assert is_map(codex_command)
+    assert Map.get(codex_command, "posix") =~ "PATH=\"$HOME/.local/bin:$PATH\" codex"
+    assert Map.get(codex_command, "windows") =~ "$env:PATH=\"$HOME/.local/bin;$env:PATH\"; codex"
 
     assert String.trim(prompt) != ""
     assert is_binary(Config.workflow_prompt())
@@ -1025,7 +1027,7 @@ defmodule SymphonyElixir.CoreTest do
       System.cmd("git", ["-C", template_repo, "add", "README.md"])
       System.cmd("git", ["-C", template_repo, "commit", "-m", "initial"])
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       count=0
       while IFS= read -r line; do
@@ -1054,8 +1056,8 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server"
+        hook_after_create: "cp #{posix_shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -1108,7 +1110,7 @@ defmodule SymphonyElixir.CoreTest do
       System.cmd("git", ["-C", template_repo, "add", "README.md"])
       System.cmd("git", ["-C", template_repo, "commit", "-m", "initial"])
 
-      File.write!(
+      write_posix_script!(
         codex_binary,
         """
         #!/bin/sh
@@ -1139,8 +1141,8 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server"
+        hook_after_create: "cp #{posix_shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -1197,7 +1199,9 @@ defmodule SymphonyElixir.CoreTest do
       System.cmd("git", ["-C", template_repo, "add", "README.md"])
       System.cmd("git", ["-C", template_repo, "commit", "-m", "initial"])
 
-      File.write!(codex_binary, """
+      System.put_env("SYMP_TEST_CODEx_TRACE", posix_shell_path(trace_file))
+
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex.trace}"
       run_id="$(date +%s%N)-$$"
@@ -1229,14 +1233,13 @@ defmodule SymphonyElixir.CoreTest do
       """)
 
       File.chmod!(codex_binary, 0o755)
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
 
       on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server",
+        hook_after_create: "cp #{posix_shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: codex_command_for_script(codex_binary),
         max_turns: 3
       )
 
@@ -1328,7 +1331,9 @@ defmodule SymphonyElixir.CoreTest do
       System.cmd("git", ["-C", template_repo, "add", "README.md"])
       System.cmd("git", ["-C", template_repo, "commit", "-m", "initial"])
 
-      File.write!(codex_binary, """
+      System.put_env("SYMP_TEST_CODEx_TRACE", posix_shell_path(trace_file))
+
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex.trace}"
       printf 'RUN\\n' >> "$trace_file"
@@ -1359,14 +1364,13 @@ defmodule SymphonyElixir.CoreTest do
       """)
 
       File.chmod!(codex_binary, 0o755)
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
 
       on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server",
+        hook_after_create: "cp #{posix_shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: codex_command_for_script(codex_binary),
         max_turns: 2
       )
 
@@ -1426,10 +1430,10 @@ defmodule SymphonyElixir.CoreTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODex_TRACE:-/tmp/codex-args.trace}"
       count=0
@@ -1464,7 +1468,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -1572,10 +1576,10 @@ defmodule SymphonyElixir.CoreTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODex_TRACE:-/tmp/codex-custom-args.trace}"
       count=0
@@ -1608,7 +1612,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} --model gpt-5.3-codex app-server"
+        codex_command: codex_command_for_script(codex_binary, "--model gpt-5.3-codex app-server")
       )
 
       issue = %Issue{
@@ -1657,10 +1661,10 @@ defmodule SymphonyElixir.CoreTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODex_TRACE:-/tmp/codex-policy-overrides.trace}"
       count=0
@@ -1697,7 +1701,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server",
+        codex_command: codex_command_for_script(codex_binary),
         codex_approval_policy: "on-request",
         codex_thread_sandbox: "workspace-write",
         codex_turn_sandbox_policy: %{

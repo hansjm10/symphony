@@ -76,6 +76,51 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "app server resolves local codex launch commands for posix and windows hosts" do
+    posix_command = "PATH=\"$HOME/.local/bin:$PATH\" codex app-server"
+    windows_command = "$env:PATH=\"$HOME/.local/bin;$env:PATH\"; codex app-server"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_command: %{
+        posix: posix_command,
+        windows: windows_command
+      }
+    )
+
+    shell_resolver = fn command, resolver_opts ->
+      family = Keyword.fetch!(resolver_opts, :family)
+
+      shell =
+        case family do
+          :posix ->
+            %{family: :posix, command_name: "bash", executable: "/bin/bash", args_prefix: ["-lc"]}
+
+          :windows ->
+            %{family: :windows, command_name: "pwsh", executable: "pwsh", args_prefix: ["-NoProfile", "-Command"]}
+        end
+
+      command_key =
+        case family do
+          :posix -> "posix"
+          :windows -> "windows"
+        end
+
+      {:ok, shell, Map.fetch!(command, command_key)}
+    end
+
+    assert {:ok, %{shell: %{family: :posix, command_name: "bash"}, command: ^posix_command}} =
+             AppServer.local_launch_spec_for_test(
+               host_shell_family: :posix,
+               shell_resolver: shell_resolver
+             )
+
+    assert {:ok, %{shell: %{family: :windows, command_name: "pwsh"}, command: ^windows_command}} =
+             AppServer.local_launch_spec_for_test(
+               host_shell_family: :windows,
+               shell_resolver: shell_resolver
+             )
+  end
+
   test "app server passes explicit turn sandbox policies through unchanged" do
     test_root =
       Path.join(
@@ -98,10 +143,10 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex-supported-turn-policies.trace}"
       count=0
@@ -155,7 +200,7 @@ defmodule SymphonyElixir.AppServerTest do
 
         write_workflow_file!(Workflow.workflow_file_path(),
           workspace_root: workspace_root,
-          codex_command: "#{codex_binary} app-server",
+          codex_command: codex_command_for_script(codex_binary),
           codex_turn_sandbox_policy: configured_policy
         )
 
@@ -205,10 +250,10 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex-input.trace}"
       count=0
@@ -240,7 +285,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -275,7 +320,7 @@ defmodule SymphonyElixir.AppServerTest do
       codex_binary = Path.join(test_root, "fake-codex")
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       count=0
       while IFS= read -r _line; do
@@ -303,7 +348,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -347,10 +392,10 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODex_TRACE:-/tmp/codex-auto-approve.trace}"
       count=0
@@ -386,7 +431,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server",
+        codex_command: codex_command_for_script(codex_binary),
         codex_approval_policy: "never"
       )
 
@@ -484,10 +529,10 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex-tool-user-input-auto-approve.trace}"
       count=0
@@ -523,7 +568,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server",
+        codex_command: codex_command_for_script(codex_binary),
         codex_approval_policy: "never"
       )
 
@@ -574,7 +619,7 @@ defmodule SymphonyElixir.AppServerTest do
       codex_binary = Path.join(test_root, "fake-codex")
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       count=0
       while IFS= read -r _line; do
@@ -608,7 +653,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server",
+        codex_command: codex_command_for_script(codex_binary),
         codex_approval_policy: "never"
       )
 
@@ -659,10 +704,10 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex-tool-user-input-options.trace}"
       count=0
@@ -698,7 +743,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -759,10 +804,10 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex-tool-call.trace}"
       count=0
@@ -798,7 +843,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -860,10 +905,10 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex-supported-tool-call.trace}"
       count=0
@@ -899,7 +944,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -982,10 +1027,10 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", posix_shell_path(trace_file))
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex-tool-call-failed.trace}"
       count=0
@@ -1021,7 +1066,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -1079,7 +1124,7 @@ defmodule SymphonyElixir.AppServerTest do
       codex_binary = Path.join(test_root, "fake-codex")
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       count=0
       while IFS= read -r line; do
@@ -1111,7 +1156,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -1143,7 +1188,7 @@ defmodule SymphonyElixir.AppServerTest do
       codex_binary = Path.join(test_root, "fake-codex")
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       count=0
       while IFS= read -r line; do
@@ -1175,7 +1220,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -1218,7 +1263,7 @@ defmodule SymphonyElixir.AppServerTest do
       codex_binary = Path.join(test_root, "fake-codex")
       File.mkdir_p!(workspace)
 
-      File.write!(codex_binary, """
+      write_posix_script!(codex_binary, """
       #!/bin/sh
       count=0
       while IFS= read -r line; do
@@ -1250,7 +1295,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: codex_command_for_script(codex_binary)
       )
 
       issue = %Issue{
@@ -1277,6 +1322,9 @@ defmodule SymphonyElixir.AppServerTest do
   end
 
   test "app server launches over ssh for remote workers" do
+    if match?({:win32, _}, :os.type()) do
+      :ok
+    else
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -1293,45 +1341,95 @@ defmodule SymphonyElixir.AppServerTest do
 
     try do
       trace_file = Path.join(test_root, "ssh.trace")
-      fake_ssh = Path.join(test_root, "ssh")
+      fake_ssh_script = Path.join(test_root, "ssh-script")
+      fake_ssh =
+        case :os.type() do
+          {:win32, _} -> Path.join(test_root, "ssh.cmd")
+          _ -> Path.join(test_root, "ssh")
+        end
+
       remote_workspace = "/remote/workspaces/MT-REMOTE"
 
       File.mkdir_p!(test_root)
       System.put_env("SYMP_TEST_SSH_TRACE", trace_file)
-      System.put_env("PATH", test_root <> ":" <> (previous_path || ""))
+      path_separator =
+        case :os.type() do
+          {:win32, _} -> ";"
+          _ -> ":"
+        end
 
-      File.write!(fake_ssh, """
-      #!/bin/sh
-      trace_file="${SYMP_TEST_SSH_TRACE:-/tmp/symphony-fake-ssh.trace}"
-      count=0
-      printf 'ARGV:%s\\n' "$*" >> "$trace_file"
+      System.put_env("PATH", test_root <> path_separator <> (previous_path || ""))
 
-      while IFS= read -r line; do
-        count=$((count + 1))
-        printf 'JSON:%s\\n' "$line" >> "$trace_file"
+      case :os.type() do
+        {:win32, _} ->
+          fake_ssh_ps1 = Path.join(test_root, "ssh.ps1")
 
-        case "$count" in
-          1)
-            printf '%s\\n' '{"id":1,"result":{}}'
-            ;;
-          2)
-            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-remote"}}}'
-            ;;
-          3)
-            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-remote"}}}'
-            ;;
-          4)
-            printf '%s\\n' '{"method":"turn/completed"}'
-            exit 0
-            ;;
-          *)
-            exit 0
-            ;;
-        esac
-      done
-      """)
+          File.write!(fake_ssh_ps1, """
+          $traceFile = $env:SYMP_TEST_SSH_TRACE
+          if ([string]::IsNullOrWhiteSpace($traceFile)) {
+            $traceFile = Join-Path $env:TEMP "symphony-fake-ssh.trace"
+          }
 
-      File.chmod!(fake_ssh, 0o755)
+          $count = 0
+          Add-Content -Path $traceFile -Value ("ARGV:" + ($args -join " "))
+
+          while (($line = [Console]::In.ReadLine()) -ne $null) {
+            $count += 1
+            Add-Content -Path $traceFile -Value ("JSON:" + $line)
+
+            switch ($count) {
+              1 { [Console]::Out.WriteLine('{"id":1,"result":{}}') }
+              2 { [Console]::Out.WriteLine('{"id":2,"result":{"thread":{"id":"thread-remote"}}}') }
+              3 { [Console]::Out.WriteLine('{"id":3,"result":{"turn":{"id":"turn-remote"}}}') }
+              4 {
+                [Console]::Out.WriteLine('{"method":"turn/completed"}')
+                exit 0
+              }
+              default { exit 0 }
+            }
+          }
+          """)
+
+          File.write!(
+            fake_ssh,
+            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0ssh.ps1\" %*\r\n"
+          )
+
+        _ ->
+          write_posix_script!(fake_ssh_script, """
+          #!/bin/sh
+          trace_file="${SYMP_TEST_SSH_TRACE:-/tmp/symphony-fake-ssh.trace}"
+          count=0
+          printf 'ARGV:%s\\n' "$*" >> "$trace_file"
+
+          while IFS= read -r line; do
+            count=$((count + 1))
+            printf 'JSON:%s\\n' "$line" >> "$trace_file"
+
+            case "$count" in
+              1)
+                printf '%s\\n' '{"id":1,"result":{}}'
+                ;;
+              2)
+                printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-remote"}}}'
+                ;;
+              3)
+                printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-remote"}}}'
+                ;;
+              4)
+                printf '%s\\n' '{"method":"turn/completed"}'
+                exit 0
+                ;;
+              *)
+                exit 0
+                ;;
+            esac
+          done
+          """)
+
+          File.rename!(fake_ssh_script, fake_ssh)
+          File.chmod!(fake_ssh, 0o755)
+      end
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: "/remote/workspaces",
@@ -1405,6 +1503,63 @@ defmodule SymphonyElixir.AppServerTest do
              end)
     after
       File.rm_rf(test_root)
+    end
+    end
+  end
+
+  test "windows local port command resolves codex launcher to native executable" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-windows-codex-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      launcher_path = Path.join(test_root, "codex.cmd")
+
+      native_executable =
+        Path.join([
+          test_root,
+          "node_modules",
+          "@openai",
+          "codex",
+          "node_modules",
+          "@openai",
+          "codex-win32-x64",
+          "vendor",
+          "x86_64-pc-windows-msvc",
+          "codex",
+          "codex.exe"
+        ])
+
+      File.mkdir_p!(Path.dirname(native_executable))
+      File.write!(launcher_path, "@echo off\r\n")
+      File.write!(native_executable, "")
+
+      assert {:ok, executable, ["--model", "gpt-5.3-codex", "app-server"]} =
+               AppServer.local_port_command_for_test(
+                 "#{launcher_path} --model gpt-5.3-codex app-server",
+                 {:win32, :nt}
+               )
+
+      assert Path.expand(executable) == Path.expand(native_executable)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "windows local port command falls back to cmd for shell expressions" do
+    case System.find_executable("cmd.exe") do
+      nil ->
+        :ok
+
+      cmd_executable ->
+        command = "codex app-server && echo ready"
+
+        assert {:ok, executable, ["/d", "/s", "/c", ^command]} =
+                 AppServer.local_port_command_for_test(command, {:win32, :nt})
+
+        assert Path.expand(executable) == Path.expand(cmd_executable)
     end
   end
 end

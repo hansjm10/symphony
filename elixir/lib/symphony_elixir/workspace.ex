@@ -301,7 +301,7 @@ defmodule SymphonyElixir.Workspace do
 
       task =
         Task.async(fn ->
-          System.cmd(shell.executable, shell.args_prefix ++ [resolved_command],
+          SymphonyElixir.ProcessRunner.run(shell.executable, shell.args_prefix ++ [resolved_command],
             cd: workspace,
             stderr_to_stdout: true
           )

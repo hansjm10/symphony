@@ -28,7 +28,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "git clone --depth 1 #{template_repo} ."
+        hook_after_create: "git clone --depth 1 #{posix_shell_path(template_repo)} ."
       )
 
       assert {:ok, workspace} = Workspace.create_for_issue("S-1")
@@ -986,6 +986,45 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.tracker.api_key == api_key
     assert config.workspace.root == Path.expand(workspace_root)
     assert config.codex.command == "#{codex_bin} app-server"
+  end
+
+  test "config supports shell-aware codex command maps" do
+    posix_command = "PATH=\"$HOME/.local/bin:$PATH\" codex app-server"
+    windows_command = "$env:PATH=\"$HOME/.local/bin;$env:PATH\"; codex app-server"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_command: %{
+        posix: posix_command,
+        windows: windows_command
+      }
+    )
+
+    assert Config.settings!().codex.command == %{
+             "posix" => posix_command,
+             "windows" => windows_command
+           }
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_command: %{
+        sh: "codex app-server",
+        pwsh: "codex app-server"
+      }
+    )
+
+    assert Config.settings!().codex.command == %{
+             "sh" => "codex app-server",
+             "pwsh" => "codex app-server"
+           }
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_command: %{
+        cmd: "codex app-server"
+      }
+    )
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "codex.command"
+    assert message =~ "sh, pwsh, posix, and windows"
   end
 
   test "config no longer resolves legacy env: references" do

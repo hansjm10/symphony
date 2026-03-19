@@ -155,9 +155,11 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    alias SymphonyElixir.Config.Schema.StringOrMap
+
     @primary_key false
     embedded_schema do
-      field(:command, :string, default: "codex app-server")
+      field(:command, StringOrMap, default: "codex app-server")
 
       field(:approval_policy, StringOrMap,
         default: %{
@@ -193,10 +195,48 @@ defmodule SymphonyElixir.Config.Schema do
         empty_values: []
       )
       |> validate_required([:command])
+      |> validate_codex_command()
       |> validate_number(:turn_timeout_ms, greater_than: 0)
       |> validate_number(:read_timeout_ms, greater_than: 0)
       |> validate_number(:stall_timeout_ms, greater_than_or_equal_to: 0)
     end
+
+    defp validate_codex_command(changeset) do
+      validate_change(changeset, :command, fn :command, value ->
+        validate_codex_command_value(value)
+      end)
+    end
+
+    defp validate_codex_command_value(value) when is_binary(value), do: []
+
+    defp validate_codex_command_value(value) when is_map(value) do
+      normalized_map =
+        Map.new(value, fn {key, command_value} ->
+          {to_string(key), command_value}
+        end)
+
+      invalid_keys =
+        normalized_map
+        |> Map.keys()
+        |> Enum.reject(&(&1 in ["pwsh", "sh", "windows", "posix"]))
+        |> Enum.sort()
+
+      cond do
+        map_size(normalized_map) == 0 ->
+          [command: "must define at least one shell command"]
+
+        invalid_keys != [] ->
+          [command: "must only contain sh, pwsh, posix, and windows keys"]
+
+        Enum.any?(normalized_map, fn {_key, command_value} -> not is_binary(command_value) end) ->
+          [command: "must contain string shell commands"]
+
+        true ->
+          []
+      end
+    end
+
+    defp validate_codex_command_value(_value), do: [command: "must be a string or shell map"]
   end
 
   defmodule Hooks do
@@ -420,7 +460,8 @@ defmodule SymphonyElixir.Config.Schema do
 
     codex = %{
       settings.codex
-      | approval_policy: normalize_keys(settings.codex.approval_policy),
+      | command: normalize_string_or_map(settings.codex.command),
+        approval_policy: normalize_keys(settings.codex.approval_policy),
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
@@ -438,6 +479,8 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp normalize_optional_map(nil), do: nil
   defp normalize_optional_map(value) when is_map(value), do: normalize_keys(value)
+  defp normalize_string_or_map(value) when is_map(value), do: normalize_keys(value)
+  defp normalize_string_or_map(value), do: value
 
   defp normalize_key(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_key(value), do: to_string(value)
@@ -472,7 +515,7 @@ defmodule SymphonyElixir.Config.Schema do
         default
 
       path ->
-        path
+        Path.expand(path)
     end
   end
 

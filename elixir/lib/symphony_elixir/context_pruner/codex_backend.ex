@@ -269,7 +269,7 @@ defmodule SymphonyElixir.ContextPruner.CodexBackend do
   end
 
   defp run_command(shell, command, workspace_dir) do
-    System.cmd(shell.executable, shell.args_prefix ++ [command],
+    SymphonyElixir.ProcessRunner.run(shell.executable, shell.args_prefix ++ [command],
       cd: workspace_dir,
       stderr_to_stdout: true
     )
