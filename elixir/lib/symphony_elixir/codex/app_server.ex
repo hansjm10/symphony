@@ -312,7 +312,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp windows_shell_command?(command) when is_binary(command) do
-    String.contains?(command, ["&&", "||", "|", ">", "<", "%", "!", "^", "\n", "\r"])
+    String.contains?(command, ["&&", "||", "&", ";", "|", ">", "<", "%", "!", "^", "\n", "\r"])
   end
 
   defp resolve_windows_executable(program) when is_binary(program) do

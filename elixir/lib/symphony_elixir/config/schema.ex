@@ -515,9 +515,12 @@ defmodule SymphonyElixir.Config.Schema do
         default
 
       path ->
-        Path.expand(path)
+        expand_local_path(path)
     end
   end
+
+  defp expand_local_path("~" <> _ = path), do: path
+  defp expand_local_path(path), do: Path.expand(path)
 
   defp resolve_env_value(value, fallback) when is_binary(value) do
     case env_reference_name(value) do

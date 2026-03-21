@@ -1572,6 +1572,26 @@ defmodule SymphonyElixir.StatusDashboard do
         ])
       )
 
+    cached_input =
+      parse_integer(
+        map_value(usage, [
+          "cached_input_tokens",
+          :cached_input_tokens,
+          "cached_tokens",
+          :cached_tokens,
+          "cachedInputTokens",
+          :cachedInputTokens
+        ]) ||
+          map_path(usage, ["input_tokens_details", "cached_tokens"]) ||
+          map_path(usage, [:input_tokens_details, :cached_tokens]) ||
+          map_path(usage, ["prompt_tokens_details", "cached_tokens"]) ||
+          map_path(usage, [:prompt_tokens_details, :cached_tokens]) ||
+          map_path(usage, ["inputTokensDetails", "cachedTokens"]) ||
+          map_path(usage, [:inputTokensDetails, :cachedTokens]) ||
+          map_path(usage, ["promptTokensDetails", "cachedTokens"]) ||
+          map_path(usage, [:promptTokensDetails, :cachedTokens])
+      )
+
     output =
       parse_integer(
         map_value(usage, [
@@ -1601,6 +1621,7 @@ defmodule SymphonyElixir.StatusDashboard do
     parts =
       []
       |> append_usage_part("in", input)
+      |> append_usage_part("cached", cached_input)
       |> append_usage_part("out", output)
       |> append_usage_part("total", total)
 

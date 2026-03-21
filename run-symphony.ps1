@@ -96,6 +96,29 @@ function Test-AnyFileNewerThan {
   return $false
 }
 
+function Get-ListeningProcessesForPort {
+  param(
+    [Parameter(Mandatory = $true)]
+    [int] $Port
+  )
+
+  $getNetTcpConnection = Get-Command -Name "Get-NetTCPConnection" -ErrorAction SilentlyContinue
+
+  if ($null -eq $getNetTcpConnection) {
+    return @()
+  }
+
+  $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+
+  if ($null -eq $listeners) {
+    return @()
+  }
+
+  return $listeners |
+    Select-Object -ExpandProperty OwningProcess -Unique |
+    Where-Object { $_ -ne 0 }
+}
+
 if (Test-Path -LiteralPath $EnvFile) {
   Import-DotEnv -Path $EnvFile
 }
@@ -103,7 +126,7 @@ if (Test-Path -LiteralPath $EnvFile) {
 $SymphonyDir = if ($env:SYMPHONY_DIR) { $env:SYMPHONY_DIR } else { Join-Path $RootDir "elixir" }
 $MiseBin = if ($env:MISE_BIN) { Resolve-ToolPath -Value $env:MISE_BIN } else { Resolve-CommandPath -Name "mise" }
 $Port = if ($env:SYMPHONY_PORT) { $env:SYMPHONY_PORT } else { "8080" }
-$Host = if ($env:SYMPHONY_HOST) { $env:SYMPHONY_HOST } else { "0.0.0.0" }
+$BindHost = if ($env:SYMPHONY_HOST) { $env:SYMPHONY_HOST } else { "0.0.0.0" }
 $WorkflowFile = if ($env:WORKFLOW_FILE) { $env:WORKFLOW_FILE } else { Join-Path $SymphonyDir "WORKFLOW.md" }
 $SymphonyBin = if ($env:SYMPHONY_BIN) { $env:SYMPHONY_BIN } else { Join-Path $SymphonyDir "bin/symphony" }
 
@@ -118,6 +141,18 @@ if ([string]::IsNullOrWhiteSpace($MiseBin) -or -not (Test-Path -LiteralPath $Mis
 
 if (-not (Test-Path -LiteralPath $WorkflowFile -PathType Leaf)) {
   Write-Error "Workflow file not found: $WorkflowFile"
+}
+
+$PortNumber = 0
+
+if (-not [int]::TryParse($Port, [ref] $PortNumber)) {
+  Write-Error "SYMPHONY_PORT must be an integer: $Port"
+}
+
+$ListeningProcesses = @(Get-ListeningProcessesForPort -Port $PortNumber)
+
+if ($ListeningProcesses.Count -gt 0) {
+  Write-Error "Port $PortNumber is already in use by PID(s): $($ListeningProcesses -join ', '). Stop the existing process or set SYMPHONY_PORT to a different port."
 }
 
 $env:LANG = if ($env:LANG) { $env:LANG } else { "C.UTF-8" }
@@ -160,11 +195,14 @@ try {
     }
   }
 
+  Write-Host "Starting Symphony on http://127.0.0.1:$Port using $WorkflowFile"
+  Write-Host "Symphony runs in the foreground. Press Ctrl+C to stop it."
+
   # Launch via escript so the generated entrypoint also works on Windows.
   & $MiseBin exec -- escript $SymphonyBin `
     --i-understand-that-this-will-be-running-without-the-usual-guardrails `
     --port $Port `
-    --host $Host `
+    --host $BindHost `
     $WorkflowFile
 
   exit $LASTEXITCODE

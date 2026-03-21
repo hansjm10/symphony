@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Precision Telemetry - Codex Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Inter:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-tertiary": "#fff7fa",
+                        "on-surface-variant": "#5f5e68",
+                        "primary-fixed": "#cac6ff",
+                        "primary-container": "#cac6ff",
+                        "primary": "#5c5a8b",
+                        "on-secondary-fixed": "#3e3d51",
+                        "tertiary": "#765377",
+                        "secondary": "#5e5d72",
+                        "surface-container": "#f0ecf6",
+                        "primary-fixed-dim": "#bcb9f0",
+                        "on-error": "#fff7f7",
+                        "tertiary-dim": "#69486b",
+                        "secondary-fixed-dim": "#d5d2eb",
+                        "on-tertiary-container": "#654568",
+                        "on-tertiary-fixed": "#513254",
+                        "secondary-fixed": "#e3e0f9",
+                        "inverse-on-surface": "#9e9ca2",
+                        "inverse-primary": "#cac6ff",
+                        "tertiary-fixed-dim": "#efc4ee",
+                        "tertiary-container": "#fed2fd",
+                        "on-secondary": "#fbf7ff",
+                        "surface-dim": "#dcd8e4",
+                        "outline": "#7b7984",
+                        "surface-bright": "#fcf8fe",
+                        "surface": "#fcf8fe",
+                        "error": "#a8364b",
+                        "background": "#fcf8fe",
+                        "on-background": "#32313b",
+                        "on-primary-container": "#403f6e",
+                        "surface-container-highest": "#e4e1ed",
+                        "on-secondary-container": "#515064",
+                        "secondary-container": "#e3e0f9",
+                        "inverse-surface": "#0e0e12",
+                        "on-surface": "#32313b",
+                        "surface-tint": "#5c5a8b",
+                        "on-primary-fixed": "#2c2b59",
+                        "on-secondary-fixed-variant": "#5b596e",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-low": "#f6f2fa",
+                        "on-error-container": "#6e0523",
+                        "on-primary": "#fbf7ff",
+                        "tertiary-fixed": "#fed2fd",
+                        "outline-variant": "#b3b0bc",
+                        "on-tertiary-fixed-variant": "#704e72",
+                        "error-container": "#f97386",
+                        "primary-dim": "#504e7e",
+                        "surface-variant": "#e4e1ed",
+                        "error-dim": "#6b0221",
+                        "secondary-dim": "#525166",
+                        "surface-container-high": "#eae6f1",
+                        "on-primary-fixed-variant": "#494878"
+                    },
+                    fontFamily: {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Inter"],
+                        "label": ["Inter"],
+                        "mono": ["JetBrains Mono"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .mono-text { font-family: 'JetBrains Mono', monospace; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #b3b0bc; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-background text-on-background selection:bg-primary-container selection:text-on-primary-container">
+<!-- SideNavBar Shell -->
+<aside class="fixed left-0 top-0 h-full flex flex-col h-screen w-64 bg-slate-50 dark:bg-slate-900 font-['Space_Grotesk'] tracking-tight z-50">
+<div class="p-6">
+<div class="flex items-center gap-3 mb-8">
+<div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-on-primary">
+<span class="material-symbols-outlined text-sm">terminal</span>
+</div>
+<div>
+<h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 leading-none">Precision Telemetry</h1>
+<p class="text-[10px] uppercase tracking-[0.2em] text-slate-500 mt-1">Codex Dashboard</p>
+</div>
+</div>
+<nav class="space-y-1">
+<a class="flex items-center gap-3 px-4 py-3 text-indigo-700 dark:text-indigo-300 font-bold border-r-2 border-indigo-600 bg-slate-200/50 transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="code">code</span>
+<span>Codex</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/50 transition-colors scale-95 duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="api">api</span>
+<span>API</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/50 transition-colors scale-95 duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="terminal">terminal</span>
+<span>Runtime</span>
+</a>
+</nav>
+</div>
+<div class="mt-auto p-6 space-y-1">
+<a class="flex items-center gap-3 px-4 py-3 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/50 transition-colors scale-95 duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span>Settings</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/50 transition-colors scale-95 duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined" data-icon="help">help</span>
+<span>Support</span>
+</a>
+<div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center gap-3 px-2">
+<img alt="User Profile" class="w-8 h-8 rounded-full bg-surface-container" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCXiUwPs908kehIBRAe67Zqx-jn6YNXIUsHtn4NqYBqKdkfcW_cbdn3098rQDE6o9uzsrOlCzEvdJYyved5mLvrOYsYBfIh9IbqxslyhQ0cg7vSHFz_89r1F_Iu45W0I5fEkv-u7Ipkhgl21g83Uvt8Nry37YBcUGnypqK19tJovvvCGakqZfTmM8wVvYo-XY2CbvUTO8GVU8454k3k4uu8LsP2n9JKZb3GwtBqpqXUWssvqOmMkKgLdoiRLlUnRYJc1GM6r152GrKf"/>
+<div class="overflow-hidden">
+<p class="text-xs font-bold truncate">Admin Session</p>
+<p class="text-[10px] text-slate-400 truncate">ops@codex.internal</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- TopAppBar Shell -->
+<header class="fixed top-0 right-0 left-64 z-40 flex justify-between items-center px-8 h-16 bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl shadow-sm dark:shadow-none font-['Space_Grotesk'] text-sm uppercase tracking-widest">
+<div class="flex items-center gap-8">
+<span class="text-lg font-black text-indigo-700 dark:text-indigo-300">Codex Telemetry</span>
+<nav class="hidden md:flex items-center gap-6">
+<a class="text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 pb-1" href="#">Live Feed</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-300 transition-all opacity-80 hover:opacity-100" href="#">History</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-indigo-500 dark:hover:text-indigo-300 transition-all opacity-80 hover:opacity-100" href="#">Alerts</a>
+</nav>
+</div>
+<div class="flex items-center gap-6">
+<div class="relative group">
+<input class="bg-surface-container-low border-none rounded-full px-4 py-1.5 text-[10px] w-48 focus:ring-1 focus:ring-primary transition-all" placeholder="SEARCH SYSTEM..." type="text"/>
+<span class="material-symbols-outlined absolute right-3 top-1.5 text-slate-400 text-sm">search</span>
+</div>
+<div class="flex items-center gap-4 text-slate-500">
+<span class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors" data-icon="notifications_active">notifications_active</span>
+<span class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors" data-icon="account_tree">account_tree</span>
+<img alt="Administrator" class="w-8 h-8 rounded-full border border-outline-variant/20" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCiNdAiHPg4telGjnKrRU577floDKEEIzKbnNKHm6Of4G2IAexwqlzAlo__54LeAips5pKtfn03GIJIbqvrv2hxQfl8Tc_x9_RcG4y_7-_zj5DA2skOLuj-j10on-cvC-CEpQTPV-ape1vGVJp3Zj42roQu-JFRJwHWPF1v-2efoMGn3xca8MwEIA-VwfzfMvEC9__pN33_ir1nQKUCpTcu60A8fgLokLoS0k_o7X0SWPgfJars7Cjjiq8ueZa4KcoGncA79P4vU0AK"/>
+</div>
+</div>
+</header>
+<!-- Main Canvas -->
+<main class="ml-64 pt-24 px-8 pb-12 min-h-screen">
+<!-- Dashboard Header / Metrics Grid -->
+<section class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6 mb-12">
+<!-- Metric Card 1 -->
+<div class="bg-surface-container-low p-6 rounded-xl flex flex-col justify-between group transition-all hover:bg-surface-container-lowest hover:shadow-xl hover:shadow-on-surface/5">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Total Tokens</span>
+<span class="material-symbols-outlined text-primary" data-icon="toll">toll</span>
+</div>
+<div class="mt-2">
+<div class="text-4xl font-headline font-bold text-on-background leading-none">20,322</div>
+<div class="mt-2 flex items-center gap-2">
+<span class="text-[10px] font-bold text-tertiary px-2 py-0.5 bg-tertiary-container rounded-full">+12.4%</span>
+<span class="text-[10px] text-slate-400">vs last hour</span>
+</div>
+</div>
+</div>
+<!-- Metric Card 2 -->
+<div class="bg-surface-container-low p-6 rounded-xl flex flex-col justify-between group transition-all hover:bg-surface-container-lowest hover:shadow-xl hover:shadow-on-surface/5">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Token Ratio (IN:OUT)</span>
+<span class="material-symbols-outlined text-primary" data-icon="swap_horiz">swap_horiz</span>
+</div>
+<div class="mt-2">
+<div class="flex items-end gap-2">
+<span class="text-2xl font-headline font-bold text-on-background">19,506</span>
+<span class="text-sm font-headline font-medium text-slate-400 mb-1">vs</span>
+<span class="text-2xl font-headline font-bold text-primary">816</span>
+</div>
+<div class="w-full bg-surface-variant h-1 rounded-full mt-4 overflow-hidden flex">
+<div class="bg-primary h-full" style="width: 96%"></div>
+<div class="bg-tertiary h-full" style="width: 4%"></div>
+</div>
+</div>
+</div>
+<!-- Metric Card 3 -->
+<div class="bg-surface-container-low p-6 rounded-xl flex flex-col justify-between group transition-all hover:bg-surface-container-lowest hover:shadow-xl hover:shadow-on-surface/5">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Active Commands</span>
+<span class="material-symbols-outlined text-primary" data-icon="bolt">bolt</span>
+</div>
+<div class="mt-2">
+<div class="text-4xl font-headline font-bold text-on-background leading-none">3</div>
+<div class="mt-2 flex items-center gap-2">
+<div class="flex -space-x-2">
+<div class="w-5 h-5 rounded-full bg-primary-fixed border-2 border-surface-container-low"></div>
+<div class="w-5 h-5 rounded-full bg-tertiary-fixed border-2 border-surface-container-low"></div>
+<div class="w-5 h-5 rounded-full bg-secondary-fixed border-2 border-surface-container-low"></div>
+</div>
+<span class="text-[10px] text-slate-400">Currently executing</span>
+</div>
+</div>
+</div>
+<!-- Status Card -->
+<div class="bg-primary p-6 rounded-xl text-on-primary flex flex-col justify-between shadow-lg shadow-primary/20">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest opacity-80">System Health</span>
+<div class="flex items-center gap-1.5">
+<div class="w-2 h-2 rounded-full bg-white animate-pulse"></div>
+<span class="text-[10px] font-bold uppercase">Nominal</span>
+</div>
+</div>
+<div class="mt-2">
+<div class="text-xs font-mono opacity-80 mb-2">LATENCY: 42ms</div>
+<div class="text-xs font-mono opacity-80">UPTIME: 99.98%</div>
+</div>
+</div>
+</section>
+<!-- Bento Layout: Telemetry & Recent Activity -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+<!-- Live Feed (Main Section) -->
+<section class="lg:col-span-8 space-y-6">
+<div class="flex items-center justify-between mb-4">
+<h2 class="text-sm font-bold uppercase tracking-[0.2em] text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="stream">stream</span>
+                        Telemetry Live Stream
+                    </h2>
+<div class="flex items-center gap-4">
+<span class="text-[10px] font-mono text-slate-400 uppercase">Buffer: 2.4MB/s</span>
+<button class="text-[10px] uppercase font-bold text-primary hover:underline">Clear Logs</button>
+</div>
+</div>
+<div class="bg-surface-container-low rounded-xl overflow-hidden">
+<!-- Feed Header -->
+<div class="grid grid-cols-12 gap-4 px-6 py-3 border-b border-outline-variant/10 text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-surface-container/50">
+<div class="col-span-2">Timestamp</div>
+<div class="col-span-3">Event Scope</div>
+<div class="col-span-7">Payload / Instruction</div>
+</div>
+<!-- Feed Content -->
+<div class="divide-y divide-outline-variant/5">
+<!-- Log Row 1 -->
+<div class="grid grid-cols-12 gap-4 px-6 py-4 items-center hover:bg-surface-container-lowest transition-colors">
+<div class="col-span-2 font-mono text-[11px] text-slate-400">14:22:01.442</div>
+<div class="col-span-3">
+<span class="px-2 py-0.5 rounded bg-primary-container text-on-primary-container text-[10px] font-bold uppercase">Runtime.Exec</span>
+</div>
+<div class="col-span-7 font-mono text-[11px] text-on-surface">
+                                command execution (<span class="text-indigo-600">call_ZsdH654</span>, completed)
+                            </div>
+</div>
+<!-- Log Row 2 -->
+<div class="grid grid-cols-12 gap-4 px-6 py-4 items-center hover:bg-surface-container-lowest transition-colors">
+<div class="col-span-2 font-mono text-[11px] text-slate-400">14:21:58.209</div>
+<div class="col-span-3">
+<span class="px-2 py-0.5 rounded bg-tertiary-container text-on-tertiary-container text-[10px] font-bold uppercase">Token.Usage</span>
+</div>
+<div class="col-span-7 font-mono text-[11px] text-on-surface leading-relaxed">
+                                thread token usage updated (<span class="text-slate-500">in</span> 19,506, <span class="text-slate-500">out</span> 816, <span class="text-slate-500 font-bold">total</span> 20,322)
+                            </div>
+</div>
+<!-- Log Row 3 -->
+<div class="grid grid-cols-12 gap-4 px-6 py-4 items-center hover:bg-surface-container-lowest transition-colors">
+<div class="col-span-2 font-mono text-[11px] text-slate-400">14:21:55.101</div>
+<div class="col-span-3">
+<span class="px-2 py-0.5 rounded bg-surface-variant text-on-surface-variant text-[10px] font-bold uppercase">System.Poll</span>
+</div>
+<div class="col-span-7 font-mono text-[11px] text-on-surface">
+                                heartbeat signal received from <span class="text-indigo-600">node-ap-southeast-1</span>
+</div>
+</div>
+<!-- Log Row 4 -->
+<div class="grid grid-cols-12 gap-4 px-6 py-4 items-center bg-error-container/5 border-l-2 border-error">
+<div class="col-span-2 font-mono text-[11px] text-error">14:21:50.088</div>
+<div class="col-span-3">
+<span class="px-2 py-0.5 rounded bg-error text-on-error text-[10px] font-bold uppercase">Retry.Failed</span>
+</div>
+<div class="col-span-7 font-mono text-[11px] text-error">
+                                backoff limit exceeded for <span class="underline">call_XffP092</span> [HTTP 503]
+                            </div>
+</div>
+<!-- Log Row 5 -->
+<div class="grid grid-cols-12 gap-4 px-6 py-4 items-center hover:bg-surface-container-lowest transition-colors">
+<div class="col-span-2 font-mono text-[11px] text-slate-400">14:21:44.773</div>
+<div class="col-span-3">
+<span class="px-2 py-0.5 rounded bg-primary-container text-on-primary-container text-[10px] font-bold uppercase">Runtime.Exec</span>
+</div>
+<div class="col-span-7 font-mono text-[11px] text-on-surface">
+                                command initialization (<span class="text-indigo-600">call_AaaK129</span>, pending)
+                            </div>
+</div>
+</div>
+<!-- JSON Block Preview -->
+<div class="m-6 mt-2 p-6 bg-surface-container-highest rounded-xl">
+<div class="flex items-center justify-between mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Live Payload Inspector</span>
+<span class="material-symbols-outlined text-sm text-slate-400" data-icon="content_copy">content_copy</span>
+</div>
+<pre class="font-mono text-[11px] leading-relaxed text-on-surface overflow-x-auto">{
+  "event_id": "99f3-8821-codex-tele",
+  "actor": "user_id_00129",
+  "action": "batch_process",
+  "parameters": {
+    "depth": 14,
+    "recursive": true,
+    "model": "codex-telemetry-v2"
+  },
+  "status": "active"
+}</pre>
+</div>
+</div>
+</section>
+<!-- Recent Calls (Side Section) -->
+<section class="lg:col-span-4 space-y-6">
+<div class="flex items-center justify-between mb-4">
+<h2 class="text-sm font-bold uppercase tracking-[0.2em] text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="history">history</span>
+                        Recent Calls
+                    </h2>
+</div>
+<div class="bg-surface-container-low rounded-xl p-2 space-y-1">
+<!-- Call Item 1 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-lg hover:shadow-md transition-shadow cursor-pointer">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full flex items-center justify-center bg-tertiary-container text-on-tertiary-container">
+<span class="material-symbols-outlined text-lg" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+</div>
+<div>
+<p class="text-xs font-bold font-headline uppercase tracking-wide">call_ZsdH654</p>
+<p class="text-[10px] text-slate-400">Completed 2m ago</p>
+</div>
+</div>
+<div class="text-right">
+<p class="text-[10px] font-bold text-on-surface">816 tokens</p>
+<p class="text-[10px] text-slate-400">1.2s</p>
+</div>
+</div>
+<!-- Call Item 2 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-lg hover:shadow-md transition-shadow cursor-pointer">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full flex items-center justify-center bg-primary-container text-on-primary-container">
+<span class="material-symbols-outlined text-lg animate-spin" data-icon="progress_activity">progress_activity</span>
+</div>
+<div>
+<p class="text-xs font-bold font-headline uppercase tracking-wide">call_AaaK129</p>
+<p class="text-[10px] text-primary font-medium">In Progress...</p>
+</div>
+</div>
+<div class="text-right">
+<p class="text-[10px] font-bold text-on-surface">Streaming</p>
+<p class="text-[10px] text-slate-400">0.8s</p>
+</div>
+</div>
+<!-- Call Item 3 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-lg hover:shadow-md transition-shadow cursor-pointer">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full flex items-center justify-center bg-error-container text-on-error-container">
+<span class="material-symbols-outlined text-lg" style="font-variation-settings: 'FILL' 1;">error</span>
+</div>
+<div>
+<p class="text-xs font-bold font-headline uppercase tracking-wide">call_XffP092</p>
+<p class="text-[10px] text-error font-medium">Failed</p>
+</div>
+</div>
+<div class="text-right">
+<p class="text-[10px] font-bold text-on-surface">0 tokens</p>
+<p class="text-[10px] text-slate-400">4.5s</p>
+</div>
+</div>
+<!-- Call Item 4 -->
+<div class="flex items-center justify-between p-4 bg-surface-container-lowest rounded-lg hover:shadow-md transition-shadow cursor-pointer opacity-60">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full flex items-center justify-center bg-surface-container text-slate-400">
+<span class="material-symbols-outlined text-lg" style="font-variation-settings: 'FILL' 1;">check_circle</span>
+</div>
+<div>
+<p class="text-xs font-bold font-headline uppercase tracking-wide">call_LopK091</p>
+<p class="text-[10px] text-slate-400">Completed 15m ago</p>
+</div>
+</div>
+<div class="text-right">
+<p class="text-[10px] font-bold text-on-surface">1,402 tokens</p>
+<p class="text-[10px] text-slate-400">2.1s</p>
+</div>
+</div>
+</div>
+<!-- Call to Action / Support Card -->
+<div class="bg-gradient-to-br from-indigo-900 to-indigo-700 p-6 rounded-xl text-white shadow-xl shadow-indigo-200">
+<h3 class="font-headline font-bold text-lg leading-tight mb-2">Need a custom endpoint?</h3>
+<p class="text-xs opacity-80 mb-6 font-body">Our team can help you provision dedicated infrastructure for heavy telemetry workloads.</p>
+<button class="w-full bg-white text-indigo-700 py-3 rounded-lg text-xs font-bold uppercase tracking-widest hover:bg-slate-50 transition-colors">
+                        Consult Documentation
+                    </button>
+</div>
+</section>
+</div>
+</main>
+<!-- FAB Suppression Rule followed: No FAB on dashboard to prioritize the data canvas -->
+</body></html>

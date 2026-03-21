@@ -25,11 +25,48 @@ defmodule SymphonyElixirWeb.Layouts do
             var csrfToken = document
               .querySelector("meta[name='csrf-token']")
               ?.getAttribute("content");
+            var Hooks = {
+              AutoScrollTelemetry: {
+                mounted: function () {
+                  this.edge = this.el.dataset.autoscrollEdge || "start";
+                  this.threshold = parseInt(this.el.dataset.autoscrollThreshold || "24", 10);
+                  this.shouldFollow = true;
+                  this.onScroll = this.syncFollowState.bind(this);
+                  this.el.addEventListener("scroll", this.onScroll, {passive: true});
+                  this.syncFollowState();
+                  this.scrollToEdge("auto");
+                },
+                beforeUpdate: function () {
+                  this.syncFollowState();
+                },
+                updated: function () {
+                  if (this.shouldFollow) this.scrollToEdge("smooth");
+                },
+                destroyed: function () {
+                  this.el.removeEventListener("scroll", this.onScroll);
+                },
+                syncFollowState: function () {
+                  this.shouldFollow = this.distanceFromEdge() <= this.threshold;
+                },
+                distanceFromEdge: function () {
+                  if (this.edge === "end") {
+                    return this.el.scrollHeight - this.el.clientHeight - this.el.scrollTop;
+                  }
+
+                  return this.el.scrollTop;
+                },
+                scrollToEdge: function (behavior) {
+                  var top = this.edge === "end" ? this.el.scrollHeight : 0;
+                  this.el.scrollTo({top: top, behavior: behavior});
+                }
+              }
+            };
 
             if (!window.Phoenix || !window.LiveView) return;
 
             var liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
-              params: {_csrf_token: csrfToken}
+              params: {_csrf_token: csrfToken},
+              hooks: Hooks
             });
 
             liveSocket.connect();

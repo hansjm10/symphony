@@ -988,6 +988,23 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.codex.command == "#{codex_bin} app-server"
   end
 
+  test "config keeps tilde workspace roots raw while local sandbox helpers expand them" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      workspace_root: "~/.symphony-workspaces"
+    )
+
+    assert Config.settings!().workspace.root == "~/.symphony-workspaces"
+
+    assert Config.codex_turn_sandbox_policy() == %{
+             "type" => "workspaceWrite",
+             "writableRoots" => [Path.expand("~/.symphony-workspaces")],
+             "readOnlyAccess" => %{"type" => "fullAccess"},
+             "networkAccess" => false,
+             "excludeTmpdirEnvVar" => false,
+             "excludeSlashTmp" => false
+           }
+  end
+
   test "config supports shell-aware codex command maps" do
     posix_command = "PATH=\"$HOME/.local/bin:$PATH\" codex app-server"
     windows_command = "$env:PATH=\"$HOME/.local/bin;$env:PATH\"; codex app-server"

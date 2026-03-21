@@ -101,6 +101,364 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            }
   end
 
+  test "telemetry snapshot records codex, session, and retry events" do
+    issue_id = "issue-telemetry"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-TELEMETRY",
+      title: "Telemetry test",
+      description: "Capture telemetry state",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-TELEMETRY"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :TelemetryOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    process_ref = make_ref()
+    now = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: process_ref,
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-telemetry",
+      turn_count: 1,
+      last_codex_message: nil,
+      last_codex_timestamp: now,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: now
+    }
+
+    :sys.replace_state(pid, fn state ->
+      state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :tool_call_failed,
+         payload: %{"params" => %{"tool" => "linear_graphql"}},
+         timestamp: now
+       }}
+    )
+
+    send(pid, {:DOWN, process_ref, :process, self(), :normal})
+
+    telemetry_snapshot = Orchestrator.telemetry_snapshot(orchestrator_name, 50)
+    issue_snapshot = Orchestrator.issue_telemetry_snapshot("MT-TELEMETRY", orchestrator_name, 50)
+
+    assert telemetry_snapshot.summary.event_count >= 3
+    assert telemetry_snapshot.summary.counts_by_kind["codex"] >= 1
+    assert telemetry_snapshot.summary.counts_by_kind["session"] >= 1
+    assert telemetry_snapshot.summary.counts_by_kind["retry"] >= 1
+    assert issue_snapshot.issue_id == issue_id
+    assert issue_snapshot.status == "retrying"
+    assert Enum.any?(issue_snapshot.events, &(&1.kind == "codex" and &1.status == "error"))
+    assert Enum.any?(issue_snapshot.events, &(&1.kind == "retry" and &1.status == "scheduled"))
+  end
+
+  test "telemetry ignores command output streaming deltas until command execution completes" do
+    issue_id = "issue-telemetry-stream"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-TELEMETRY-STREAM",
+      title: "Telemetry stream test",
+      description: "Suppress stream chunk telemetry noise",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-TELEMETRY-STREAM"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :TelemetryStreamOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    now = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-telemetry-stream",
+      turn_count: 1,
+      last_codex_message: nil,
+      last_codex_timestamp: now,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: now
+    }
+
+    :sys.replace_state(pid, fn state ->
+      state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(state.claimed, issue_id))
+    end)
+
+    Enum.each(["identifier", "id", "issue {", "success"], fn chunk ->
+      send(
+        pid,
+        {:codex_worker_update, issue_id,
+         %{
+           event: :notification,
+           payload: %{
+             "method" => "item/commandExecution/outputDelta",
+             "params" => %{"outputDelta" => chunk}
+           },
+           timestamp: now
+         }}
+      )
+    end)
+
+    stream_snapshot = Orchestrator.issue_telemetry_snapshot("MT-TELEMETRY-STREAM", orchestrator_name, 50)
+
+    assert stream_snapshot.summary.event_count == 0
+    assert stream_snapshot.events == []
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "item/completed",
+           "params" => %{
+             "item" => %{
+               "id" => "cmd-telemetry-stream",
+               "type" => "commandExecution",
+               "status" => "completed"
+             }
+           }
+         },
+         timestamp: now
+       }}
+    )
+
+    completed_snapshot = Orchestrator.issue_telemetry_snapshot("MT-TELEMETRY-STREAM", orchestrator_name, 50)
+
+    assert completed_snapshot.summary.event_count == 1
+    assert length(completed_snapshot.events) == 1
+    assert hd(completed_snapshot.events).kind == "codex"
+    assert hd(completed_snapshot.events).summary =~ "item completed: command execution"
+  end
+
+  test "issue telemetry snapshot aggregates streamed Codex conversation steps" do
+    issue_id = "issue-telemetry-conversation"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-TELEMETRY-CONVO",
+      title: "Conversation aggregation test",
+      description: "Fold streaming deltas into a readable conversation timeline",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-TELEMETRY-CONVO"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :TelemetryConversationOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    now = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-telemetry-convo",
+      turn_count: 1,
+      last_codex_message: nil,
+      last_codex_timestamp: now,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: now
+    }
+
+    :sys.replace_state(pid, fn state ->
+      state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-telemetry-convo",
+         payload: %{
+           "method" => "item/started",
+           "params" => %{
+             "item" => %{
+               "id" => "msg-telemetry-convo",
+               "type" => "agentMessage",
+               "status" => "running"
+             }
+           }
+         },
+         timestamp: now
+       }}
+    )
+
+    Enum.each(["Planning ", "the dashboard walkthrough"], fn chunk ->
+      send(
+        pid,
+        {:codex_worker_update, issue_id,
+         %{
+           event: :notification,
+           session_id: "thread-telemetry-convo",
+           payload: %{
+             "method" => "item/agentMessage/delta",
+             "params" => %{"delta" => chunk}
+           },
+           timestamp: now
+         }}
+      )
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         session_id: "thread-telemetry-convo",
+         payload: %{
+           "method" => "item/completed",
+           "params" => %{
+             "item" => %{
+               "id" => "msg-telemetry-convo",
+               "type" => "agentMessage",
+               "status" => "completed"
+             }
+           }
+         },
+         timestamp: now
+       }}
+    )
+
+    snapshot = Orchestrator.issue_telemetry_snapshot("MT-TELEMETRY-CONVO", orchestrator_name, 50)
+
+    assert length(snapshot.conversation) == 1
+
+    assert hd(snapshot.conversation) == %{
+             id: hd(snapshot.conversation).id,
+             at: now,
+             updated_at: now,
+             session_id: "thread-telemetry-convo",
+             item_id: "msg-telemetry-convo",
+             kind: "assistant",
+             status: "completed",
+             title: "Codex reply",
+             content: "Planning the dashboard walkthrough"
+           }
+  end
+
+  test "issue telemetry snapshot keeps newest events first and enforces the issue buffer limit" do
+    issue_id = "issue-telemetry-limit"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-TELEMETRY-LIMIT",
+      title: "Telemetry limit test",
+      description: "Validate bounded telemetry history",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-TELEMETRY-LIMIT"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :TelemetryLimitOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-telemetry-limit",
+      turn_count: 1,
+      last_codex_message: nil,
+      last_codex_timestamp: DateTime.utc_now(),
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn state ->
+      state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(state.claimed, issue_id))
+    end)
+
+    Enum.each(1..55, fn index ->
+      send(
+        pid,
+        {:codex_worker_update, issue_id,
+         %{
+           event: :notification,
+           payload: %{
+             "method" => "item/tool/call",
+             "params" => %{"tool" => "tool-#{index}"}
+           },
+           timestamp: DateTime.utc_now()
+         }}
+      )
+    end)
+
+    snapshot = Orchestrator.issue_telemetry_snapshot("MT-TELEMETRY-LIMIT", orchestrator_name, 50)
+
+    assert snapshot.summary.event_count == 50
+    assert length(snapshot.events) == 50
+    assert hd(snapshot.events).id > List.last(snapshot.events).id
+  end
+
   test "orchestrator snapshot tracks codex thread totals and app-server pid" do
     issue_id = "issue-usage-snapshot"
 
@@ -172,7 +530,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            "method" => "thread/tokenUsage/updated",
            "params" => %{
              "tokenUsage" => %{
-               "total" => %{"inputTokens" => 12, "outputTokens" => 4, "totalTokens" => 16}
+               "total" => %{
+                 "inputTokens" => 12,
+                 "inputTokensDetails" => %{"cachedTokens" => 5},
+                 "outputTokens" => 4,
+                 "totalTokens" => 16
+               }
              }
            }
          },
@@ -185,6 +548,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert %{running: [snapshot_entry]} = snapshot
     assert snapshot_entry.codex_app_server_pid == "4242"
     assert snapshot_entry.codex_input_tokens == 12
+    assert snapshot_entry.codex_cached_input_tokens == 5
     assert snapshot_entry.codex_output_tokens == 4
     assert snapshot_entry.codex_total_tokens == 16
     assert snapshot_entry.turn_count == 1
@@ -194,6 +558,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     completed_state = :sys.get_state(pid)
 
     assert completed_state.codex_totals.input_tokens == 12
+    assert completed_state.codex_totals.cached_input_tokens == 5
     assert completed_state.codex_totals.output_tokens == 4
     assert completed_state.codex_totals.total_tokens == 16
     assert is_integer(completed_state.codex_totals.seconds_running)
@@ -255,7 +620,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
          event: :turn_completed,
          payload: %{
            method: "turn/completed",
-           usage: %{"input_tokens" => "12", "output_tokens" => 4, "total_tokens" => 16}
+           usage: %{
+             "input_tokens" => "12",
+             "input_tokens_details" => %{"cached_tokens" => 3},
+             "output_tokens" => 4,
+             "total_tokens" => 16
+           }
          },
          timestamp: DateTime.utc_now()
        }}
@@ -264,12 +634,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     snapshot = GenServer.call(pid, :snapshot)
     assert %{running: [snapshot_entry]} = snapshot
     assert snapshot_entry.codex_input_tokens == 12
+    assert snapshot_entry.codex_cached_input_tokens == 3
     assert snapshot_entry.codex_output_tokens == 4
     assert snapshot_entry.codex_total_tokens == 16
 
     send(pid, {:DOWN, process_ref, :process, self(), :normal})
     completed_state = :sys.get_state(pid)
     assert completed_state.codex_totals.input_tokens == 12
+    assert completed_state.codex_totals.cached_input_tokens == 3
     assert completed_state.codex_totals.output_tokens == 4
     assert completed_state.codex_totals.total_tokens == 16
   end
@@ -338,6 +710,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                "info" => %{
                  "total_token_usage" => %{
                    "input_tokens" => "2",
+                   "input_tokens_details" => %{"cached_tokens" => 1},
                    "output_tokens" => 2,
                    "total_tokens" => 4
                  }
@@ -376,6 +749,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     snapshot = GenServer.call(pid, :snapshot)
     assert %{running: [snapshot_entry]} = snapshot
     assert snapshot_entry.codex_input_tokens == 10
+    assert snapshot_entry.codex_cached_input_tokens == 1
     assert snapshot_entry.codex_output_tokens == 5
     assert snapshot_entry.codex_total_tokens == 15
 
@@ -383,6 +757,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     completed_state = :sys.get_state(pid)
 
     assert completed_state.codex_totals.input_tokens == 10
+    assert completed_state.codex_totals.cached_input_tokens == 1
     assert completed_state.codex_totals.output_tokens == 5
     assert completed_state.codex_totals.total_tokens == 15
   end

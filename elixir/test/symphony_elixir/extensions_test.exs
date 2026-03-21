@@ -53,6 +53,16 @@ defmodule SymphonyElixir.ExtensionsTest do
       {:reply, %{}, state}
     end
 
+    def handle_call(:telemetry_snapshot, _from, state) do
+      Process.sleep(25)
+      {:reply, %{}, state}
+    end
+
+    def handle_call({:issue_telemetry_snapshot, _issue_identifier}, _from, state) do
+      Process.sleep(25)
+      {:reply, %{}, state}
+    end
+
     def handle_call(:request_refresh, _from, state) do
       {:reply, :unavailable, state}
     end
@@ -72,8 +82,121 @@ defmodule SymphonyElixir.ExtensionsTest do
       {:reply, Keyword.fetch!(state, :snapshot), state}
     end
 
+    def handle_call(:telemetry_snapshot, _from, state) do
+      snapshot = Keyword.fetch!(state, :snapshot)
+      telemetry = Keyword.get(state, :telemetry, default_telemetry(snapshot))
+      {:reply, telemetry, state}
+    end
+
+    def handle_call({:issue_telemetry_snapshot, issue_identifier}, _from, state) do
+      issue_telemetry =
+        state
+        |> Keyword.get(:issue_telemetry, default_issue_telemetry())
+        |> Map.get(issue_identifier, :issue_not_found)
+
+      {:reply, issue_telemetry, state}
+    end
+
     def handle_call(:request_refresh, _from, state) do
       {:reply, Keyword.get(state, :refresh, :unavailable), state}
+    end
+
+    defp default_telemetry(snapshot) do
+      %{
+        summary: %{
+          event_count: 1,
+          last_event_at: DateTime.utc_now(),
+          counts_by_kind: %{"dispatch" => 1},
+          counts_by_status: %{"started" => 1},
+          running_count: length(snapshot.running),
+          retrying_count: length(snapshot.retrying),
+          buffer_limit: 200,
+          codex_totals: snapshot.codex_totals,
+          rate_limits: snapshot.rate_limits
+        },
+        events: [
+          %{
+            id: 1,
+            at: DateTime.utc_now(),
+            issue_id: "issue-http",
+            issue_identifier: "MT-HTTP",
+            session_id: "thread-http",
+            kind: "dispatch",
+            status: "started",
+            summary: "dispatch started on local worker",
+            metrics: %{"worker_host" => "local"}
+          }
+        ]
+      }
+    end
+
+    defp default_issue_telemetry do
+      %{
+        "MT-HTTP" => %{
+          issue_id: "issue-http",
+          issue_identifier: "MT-HTTP",
+          status: "running",
+          summary: %{
+            event_count: 1,
+            last_event_at: DateTime.utc_now(),
+            counts_by_kind: %{"dispatch" => 1},
+            counts_by_status: %{"started" => 1},
+            buffer_limit: 50
+          },
+          events: [
+            %{
+              id: 11,
+              at: DateTime.utc_now(),
+              issue_id: "issue-http",
+              issue_identifier: "MT-HTTP",
+              session_id: "thread-http",
+              kind: "dispatch",
+              status: "started",
+              summary: "dispatch started on local worker",
+              metrics: %{"worker_host" => "local"}
+            }
+          ],
+          conversation: [
+            %{
+              id: 101,
+              at: DateTime.utc_now(),
+              updated_at: DateTime.utc_now(),
+              issue_id: "issue-http",
+              issue_identifier: "MT-HTTP",
+              session_id: "thread-http",
+              kind: "assistant",
+              status: "streaming",
+              title: "Codex reply",
+              content: "Inspecting the current dashboard telemetry payload."
+            }
+          ]
+        },
+        "MT-RETRY" => %{
+          issue_id: "issue-retry",
+          issue_identifier: "MT-RETRY",
+          status: "retrying",
+          summary: %{
+            event_count: 1,
+            last_event_at: DateTime.utc_now(),
+            counts_by_kind: %{"retry" => 1},
+            counts_by_status: %{"scheduled" => 1},
+            buffer_limit: 50
+          },
+          events: [
+            %{
+              id: 21,
+              at: DateTime.utc_now(),
+              issue_id: "issue-retry",
+              issue_identifier: "MT-RETRY",
+              session_id: nil,
+              kind: "retry",
+              status: "scheduled",
+              summary: "retry scheduled in 2000ms (attempt 2): boom",
+              metrics: %{"attempt" => 2, "delay_ms" => 2_000}
+            }
+          ]
+        }
+      }
     end
   end
 
@@ -356,7 +479,14 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "last_message" => "rendered",
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
-                 "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+                 "tokens" => %{
+                   "input_tokens" => 4,
+                   "cached_input_tokens" => 1,
+                   "uncached_input_tokens" => 3,
+                   "output_tokens" => 8,
+                   "total_tokens" => 12,
+                   "input_output_delta" => -4
+                 }
                }
              ],
              "retrying" => [
@@ -372,8 +502,11 @@ defmodule SymphonyElixir.ExtensionsTest do
              ],
              "codex_totals" => %{
                "input_tokens" => 4,
+               "cached_input_tokens" => 1,
+               "uncached_input_tokens" => 3,
                "output_tokens" => 8,
                "total_tokens" => 12,
+               "input_output_delta" => -4,
                "seconds_running" => 42.5
              },
              "rate_limits" => %{"primary" => %{"remaining" => 11}}
@@ -401,11 +534,30 @@ defmodule SymphonyElixir.ExtensionsTest do
                "last_event" => "notification",
                "last_message" => "rendered",
                "last_event_at" => nil,
-               "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+               "tokens" => %{
+                 "input_tokens" => 4,
+                 "cached_input_tokens" => 1,
+                 "uncached_input_tokens" => 3,
+                 "output_tokens" => 8,
+                 "total_tokens" => 12,
+                 "input_output_delta" => -4
+               }
              },
              "retry" => nil,
              "logs" => %{"codex_session_logs" => []},
              "recent_events" => [],
+             "conversation" => [
+               %{
+                 "id" => 101,
+                 "at" => issue_payload["conversation"] |> List.first() |> Map.fetch!("at"),
+                 "updated_at" => issue_payload["conversation"] |> List.first() |> Map.fetch!("updated_at"),
+                 "session_id" => "thread-http",
+                 "kind" => "assistant",
+                 "status" => "streaming",
+                 "title" => "Codex reply",
+                 "content" => "Inspecting the current dashboard telemetry payload."
+               }
+             ],
              "last_error" => nil,
              "tracked" => %{}
            }
@@ -421,6 +573,87 @@ defmodule SymphonyElixir.ExtensionsTest do
              "error" => %{"code" => "issue_not_found", "message" => "Issue not found"}
            }
 
+    conn = get(build_conn(), "/api/v1/telemetry")
+    telemetry_payload = json_response(conn, 200)
+
+    assert telemetry_payload == %{
+             "generated_at" => telemetry_payload["generated_at"],
+             "summary" => %{
+               "event_count" => 1,
+               "last_event_at" => telemetry_payload["summary"]["last_event_at"],
+               "counts_by_kind" => %{"dispatch" => 1},
+               "counts_by_status" => %{"started" => 1},
+               "running_count" => 1,
+               "retrying_count" => 1,
+               "buffer_limit" => 200,
+               "codex_totals" => %{
+                 "input_tokens" => 4,
+                 "cached_input_tokens" => 1,
+                 "uncached_input_tokens" => 3,
+                 "output_tokens" => 8,
+                 "total_tokens" => 12,
+                 "input_output_delta" => -4,
+                 "seconds_running" => 42.5
+               },
+               "rate_limits" => %{"primary" => %{"remaining" => 11}}
+             },
+             "events" => [
+               %{
+                 "id" => 1,
+                 "at" => telemetry_payload["events"] |> List.first() |> Map.fetch!("at"),
+                 "issue_id" => "issue-http",
+                 "issue_identifier" => "MT-HTTP",
+                 "session_id" => "thread-http",
+                 "kind" => "dispatch",
+                 "status" => "started",
+                 "summary" => "dispatch started on local worker",
+                 "metrics" => %{"worker_host" => "local"}
+               }
+             ]
+           }
+
+    conn = get(build_conn(), "/api/v1/MT-HTTP/telemetry")
+    issue_telemetry_payload = json_response(conn, 200)
+
+    assert issue_telemetry_payload == %{
+             "generated_at" => issue_telemetry_payload["generated_at"],
+             "issue_identifier" => "MT-HTTP",
+             "issue_id" => "issue-http",
+             "status" => "running",
+             "summary" => %{
+               "event_count" => 1,
+               "last_event_at" => issue_telemetry_payload["summary"]["last_event_at"],
+               "counts_by_kind" => %{"dispatch" => 1},
+               "counts_by_status" => %{"started" => 1},
+               "buffer_limit" => 50
+             },
+             "conversation" => [
+               %{
+                 "id" => 101,
+                 "at" => issue_telemetry_payload["conversation"] |> List.first() |> Map.fetch!("at"),
+                 "updated_at" => issue_telemetry_payload["conversation"] |> List.first() |> Map.fetch!("updated_at"),
+                 "session_id" => "thread-http",
+                 "kind" => "assistant",
+                 "status" => "streaming",
+                 "title" => "Codex reply",
+                 "content" => "Inspecting the current dashboard telemetry payload."
+               }
+             ],
+             "events" => [
+               %{
+                 "id" => 11,
+                 "at" => issue_telemetry_payload["events"] |> List.first() |> Map.fetch!("at"),
+                 "issue_id" => "issue-http",
+                 "issue_identifier" => "MT-HTTP",
+                 "session_id" => "thread-http",
+                 "kind" => "dispatch",
+                 "status" => "started",
+                 "summary" => "dispatch started on local worker",
+                 "metrics" => %{"worker_host" => "local"}
+               }
+             ]
+           }
+
     conn = post(build_conn(), "/api/v1/refresh", %{})
 
     assert %{"queued" => true, "coalesced" => false, "operations" => ["poll", "reconcile"]} =
@@ -434,6 +667,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert json_response(post(build_conn(), "/api/v1/state", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
 
+    assert json_response(post(build_conn(), "/api/v1/telemetry", %{}), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+
     assert json_response(get(build_conn(), "/api/v1/refresh"), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
 
@@ -441,6 +677,9 @@ defmodule SymphonyElixir.ExtensionsTest do
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
 
     assert json_response(post(build_conn(), "/api/v1/MT-1", %{}), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+
+    assert json_response(post(build_conn(), "/api/v1/MT-1/telemetry", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
 
     assert json_response(get(build_conn(), "/unknown"), 404) ==
@@ -451,6 +690,21 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert state_payload ==
              %{
                "generated_at" => state_payload["generated_at"],
+               "error" => %{"code" => "snapshot_unavailable", "message" => "Snapshot unavailable"}
+             }
+
+    telemetry_payload = json_response(get(build_conn(), "/api/v1/telemetry"), 200)
+
+    assert telemetry_payload ==
+             %{
+               "generated_at" => telemetry_payload["generated_at"],
+               "error" => %{"code" => "snapshot_unavailable", "message" => "Snapshot unavailable"}
+             }
+
+    issue_telemetry_payload = json_response(get(build_conn(), "/api/v1/MT-1/telemetry"), 200)
+
+    assert issue_telemetry_payload ==
+             %{
                "error" => %{"code" => "snapshot_unavailable", "message" => "Snapshot unavailable"}
              }
 
@@ -473,6 +727,21 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert timeout_payload ==
              %{
                "generated_at" => timeout_payload["generated_at"],
+               "error" => %{"code" => "snapshot_timeout", "message" => "Snapshot timed out"}
+             }
+
+    telemetry_timeout_payload = json_response(get(build_conn(), "/api/v1/telemetry"), 200)
+
+    assert telemetry_timeout_payload ==
+             %{
+               "generated_at" => telemetry_timeout_payload["generated_at"],
+               "error" => %{"code" => "snapshot_timeout", "message" => "Snapshot timed out"}
+             }
+
+    issue_telemetry_timeout_payload = json_response(get(build_conn(), "/api/v1/MT-1/telemetry"), 200)
+
+    assert issue_telemetry_timeout_payload ==
+             %{
                "error" => %{"code" => "snapshot_timeout", "message" => "Snapshot timed out"}
              }
   end
@@ -539,21 +808,28 @@ defmodule SymphonyElixir.ExtensionsTest do
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     {:ok, view, html} = live(build_conn(), "/")
-    assert html =~ "Operations Dashboard"
+    assert html =~ "Precision Telemetry"
+    assert html =~ "Codex Telemetry"
+    assert html =~ "Follow the live Codex walkthrough"
     assert html =~ "MT-HTTP"
     assert html =~ "MT-RETRY"
-    assert html =~ "rendered"
-    assert html =~ "Runtime"
+    assert html =~ "dispatch started on local worker"
+    assert html =~ "Inspecting the current dashboard telemetry payload."
+    assert html =~ "Runtime event feed"
     assert html =~ "Live"
     assert html =~ "Offline"
     assert html =~ "Copy ID"
-    assert html =~ "Codex update"
+    assert html =~ "Current execution queue"
+    assert html =~ "Running sessions"
+    assert html =~ "Follow"
+    assert html =~ "dispatch started on local worker"
+    assert html =~ "/issues/MT-HTTP/telemetry"
+    assert html =~ ~s(phx-hook="AutoScrollTelemetry")
+    assert html =~ "telemetry-scroll-region"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"
     refute html =~ "Transport"
-    assert html =~ "status-badge-live"
-    assert html =~ "status-badge-offline"
 
     updated_snapshot =
       put_in(snapshot.running, [
@@ -594,6 +870,88 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert_eventually(fn ->
       render(view) =~ "agent message content streaming: structured update"
     end)
+  end
+
+  test "dashboard liveview tolerates partial rate-limit data and missing totals" do
+    orchestrator_name = Module.concat(__MODULE__, :DashboardShapeOrchestrator)
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: %{
+          running: [],
+          retrying: [],
+          codex_totals: nil,
+          rate_limits: %{
+            limit_id: "priority-tier",
+            primary: %{remaining: 11},
+            credits: %{has_credits: false}
+          }
+        },
+        telemetry: %{
+          summary: %{
+            event_count: 1,
+            last_event_at: DateTime.utc_now(),
+            counts_by_kind: %{"dispatch" => 1},
+            counts_by_status: %{"started" => 1},
+            running_count: 0,
+            retrying_count: 0,
+            buffer_limit: 200
+          },
+          events: [
+            %{
+              id: 1,
+              at: DateTime.utc_now(),
+              issue_id: "issue-http",
+              issue_identifier: "MT-HTTP",
+              kind: "dispatch",
+              status: "started",
+              summary: "dispatch started on local worker",
+              metrics: %{"worker_host" => "local"}
+            }
+          ]
+        },
+        refresh: %{
+          queued: true,
+          coalesced: true,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll"]
+        }
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "Precision Telemetry"
+    assert html =~ "No active sessions."
+    assert html =~ "No issues are currently backing off."
+  end
+
+  test "issue telemetry liveview renders issue-specific telemetry" do
+    orchestrator_name = Module.concat(__MODULE__, :IssueTelemetryOrchestrator)
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: static_snapshot(),
+        refresh: %{
+          queued: true,
+          coalesced: true,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll"]
+        }
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/issues/MT-HTTP/telemetry")
+    assert html =~ "Issue Telemetry"
+    assert html =~ "MT-HTTP"
+    assert html =~ "dispatch started on local worker"
+    assert html =~ "Telemetry JSON"
+    assert html =~ "Issue JSON"
+    assert html =~ ~s(phx-hook="AutoScrollTelemetry")
+    assert html =~ "telemetry-scroll-region"
   end
 
   test "dashboard liveview renders an unavailable state without crashing" do
@@ -642,6 +1000,10 @@ defmodule SymphonyElixir.ExtensionsTest do
     response = Req.get!("http://127.0.0.1:#{port}/api/v1/state")
     assert response.status == 200
     assert response.body["counts"] == %{"running" => 1, "retrying" => 1}
+
+    telemetry_response = Req.get!("http://127.0.0.1:#{port}/api/v1/telemetry")
+    assert telemetry_response.status == 200
+    assert telemetry_response.body["summary"]["event_count"] == 1
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200
@@ -697,6 +1059,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           last_codex_timestamp: nil,
           last_codex_event: :notification,
           codex_input_tokens: 4,
+          codex_cached_input_tokens: 1,
           codex_output_tokens: 8,
           codex_total_tokens: 12,
           started_at: DateTime.utc_now()
@@ -711,7 +1074,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           error: "boom"
         }
       ],
-      codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
+      codex_totals: %{input_tokens: 4, cached_input_tokens: 1, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }
   end

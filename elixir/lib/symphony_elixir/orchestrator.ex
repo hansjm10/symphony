@@ -7,15 +7,19 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, CodexConversation, Config, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
+  @telemetry_runtime_limit 200
+  @telemetry_issue_limit 50
+  @conversation_issue_limit 40
   @empty_codex_totals %{
     input_tokens: 0,
+    cached_input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
     seconds_running: 0
@@ -38,7 +42,10 @@ defmodule SymphonyElixir.Orchestrator do
       claimed: MapSet.new(),
       retry_attempts: %{},
       codex_totals: nil,
-      codex_rate_limits: nil
+      codex_rate_limits: nil,
+      telemetry_runtime_events: [],
+      telemetry_issue_events: %{},
+      codex_issue_conversations: %{}
     ]
   end
 
@@ -61,7 +68,10 @@ defmodule SymphonyElixir.Orchestrator do
       tick_timer_ref: nil,
       tick_token: nil,
       codex_totals: @empty_codex_totals,
-      codex_rate_limits: nil
+      codex_rate_limits: nil,
+      telemetry_runtime_events: [],
+      telemetry_issue_events: %{},
+      codex_issue_conversations: %{}
     }
 
     run_terminal_workspace_cleanup()
@@ -128,6 +138,7 @@ defmodule SymphonyElixir.Orchestrator do
         {running_entry, state} = pop_running_entry(state, issue_id)
         state = record_session_completion_totals(state, running_entry)
         session_id = running_entry_session_id(running_entry)
+        state = append_session_exit_telemetry(state, issue_id, running_entry, reason)
 
         state =
           case reason do
@@ -175,8 +186,12 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:worker_host, runtime_info[:worker_host])
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
 
+        state =
+          %{state | running: Map.put(running, issue_id, updated_running_entry)}
+          |> append_worker_runtime_telemetry(issue_id, updated_running_entry, runtime_info)
+
         notify_dashboard()
-        {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+        {:noreply, state}
     end
   end
 
@@ -193,11 +208,14 @@ defmodule SymphonyElixir.Orchestrator do
 
         state =
           state
+          |> Map.put(:running, Map.put(running, issue_id, updated_running_entry))
           |> apply_codex_token_delta(token_delta)
           |> apply_codex_rate_limits(update)
+          |> append_codex_telemetry(issue_id, updated_running_entry, update, token_delta)
+          |> append_codex_conversation(issue_id, updated_running_entry, update)
 
         notify_dashboard()
-        {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+        {:noreply, state}
     end
   end
 
@@ -349,12 +367,18 @@ defmodule SymphonyElixir.Orchestrator do
       terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Issue moved to terminal state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
-        terminate_running_issue(state, issue.id, true)
+        state
+        |> append_orchestrator_telemetry(issue.id, issue.identifier, running_session_id(state, issue.id), "issue", "stopped", "issue moved to terminal state", %{
+          issue_state: issue.state
+        })
+        |> terminate_running_issue(issue.id, true)
 
       !issue_routable_to_worker?(issue) ->
         Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; stopping active agent")
 
-        terminate_running_issue(state, issue.id, false)
+        state
+        |> append_orchestrator_telemetry(issue.id, issue.identifier, running_session_id(state, issue.id), "issue", "stopped", "issue no longer routed to this worker", %{})
+        |> terminate_running_issue(issue.id, false)
 
       active_issue_state?(issue.state, active_states) ->
         refresh_running_issue_state(state, issue)
@@ -362,7 +386,11 @@ defmodule SymphonyElixir.Orchestrator do
       true ->
         Logger.info("Issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
-        terminate_running_issue(state, issue.id, false)
+        state
+        |> append_orchestrator_telemetry(issue.id, issue.identifier, running_session_id(state, issue.id), "issue", "stopped", "issue moved to non-active state", %{
+          issue_state: issue.state
+        })
+        |> terminate_running_issue(issue.id, false)
     end
   end
 
@@ -476,6 +504,9 @@ defmodule SymphonyElixir.Orchestrator do
       next_attempt = next_retry_attempt_from_running(running_entry)
 
       state
+      |> append_orchestrator_telemetry(issue_id, identifier, session_id, "stall", "error", "issue stalled and will restart with backoff", %{
+        elapsed_ms: elapsed_ms
+      })
       |> terminate_running_issue(issue_id, false)
       |> schedule_issue_retry(issue_id, next_attempt, %{
         identifier: identifier,
@@ -713,9 +744,11 @@ defmodule SymphonyElixir.Orchestrator do
             last_codex_event: nil,
             codex_app_server_pid: nil,
             codex_input_tokens: 0,
+            codex_cached_input_tokens: 0,
             codex_output_tokens: 0,
             codex_total_tokens: 0,
             codex_last_reported_input_tokens: 0,
+            codex_last_reported_cached_input_tokens: 0,
             codex_last_reported_output_tokens: 0,
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
@@ -729,6 +762,10 @@ defmodule SymphonyElixir.Orchestrator do
             claimed: MapSet.put(state.claimed, issue.id),
             retry_attempts: Map.delete(state.retry_attempts, issue.id)
         }
+        |> append_orchestrator_telemetry(issue.id, issue.identifier, nil, "dispatch", "started", dispatch_summary(worker_host), %{
+          worker_host: worker_host || "local",
+          attempt: attempt
+        })
 
       {:error, reason} ->
         Logger.error("Unable to spawn agent for #{issue_context(issue)}: #{inspect(reason)}")
@@ -807,6 +844,11 @@ defmodule SymphonyElixir.Orchestrator do
             workspace_path: workspace_path
           })
     }
+    |> append_orchestrator_telemetry(issue_id, identifier, running_session_id(state, issue_id), "retry", "scheduled", retry_summary(delay_ms, next_attempt, error), %{
+      attempt: next_attempt,
+      delay_ms: delay_ms,
+      worker_host: worker_host || "local"
+    })
   end
 
   defp pop_retry_attempt_state(%State{} = state, issue_id, retry_token) when is_reference(retry_token) do
@@ -1097,6 +1139,39 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @spec telemetry_snapshot() :: map() | :timeout | :unavailable
+  def telemetry_snapshot, do: telemetry_snapshot(__MODULE__, 15_000)
+
+  @spec telemetry_snapshot(GenServer.server(), timeout()) :: map() | :timeout | :unavailable
+  def telemetry_snapshot(server, timeout) do
+    if Process.whereis(server) do
+      try do
+        GenServer.call(server, :telemetry_snapshot, timeout)
+      catch
+        :exit, {:timeout, _} -> :timeout
+        :exit, _ -> :unavailable
+      end
+    else
+      :unavailable
+    end
+  end
+
+  @spec issue_telemetry_snapshot(String.t(), GenServer.server(), timeout()) ::
+          map() | :issue_not_found | :timeout | :unavailable
+  def issue_telemetry_snapshot(issue_identifier, server, timeout)
+      when is_binary(issue_identifier) do
+    if Process.whereis(server) do
+      try do
+        GenServer.call(server, {:issue_telemetry_snapshot, issue_identifier}, timeout)
+      catch
+        :exit, {:timeout, _} -> :timeout
+        :exit, _ -> :unavailable
+      end
+    else
+      :unavailable
+    end
+  end
+
   @impl true
   def handle_call(:snapshot, _from, state) do
     state = refresh_runtime_config(state)
@@ -1115,6 +1190,7 @@ defmodule SymphonyElixir.Orchestrator do
           session_id: metadata.session_id,
           codex_app_server_pid: metadata.codex_app_server_pid,
           codex_input_tokens: metadata.codex_input_tokens,
+          codex_cached_input_tokens: Map.get(metadata, :codex_cached_input_tokens, 0),
           codex_output_tokens: metadata.codex_output_tokens,
           codex_total_tokens: metadata.codex_total_tokens,
           turn_count: Map.get(metadata, :turn_count, 0),
@@ -1154,6 +1230,24 @@ defmodule SymphonyElixir.Orchestrator do
      }, state}
   end
 
+  def handle_call(:telemetry_snapshot, _from, state) do
+    state = refresh_runtime_config(state)
+
+    {:reply,
+     %{
+       summary: telemetry_runtime_summary(state),
+       events: state.telemetry_runtime_events
+     }, state}
+  end
+
+  def handle_call({:issue_telemetry_snapshot, issue_identifier}, _from, state)
+      when is_binary(issue_identifier) do
+    case issue_telemetry_snapshot_payload(state, issue_identifier) do
+      nil -> {:reply, :issue_not_found, state}
+      payload -> {:reply, payload, state}
+    end
+  end
+
   def handle_call(:request_refresh, _from, state) do
     now_ms = System.monotonic_time(:millisecond)
     already_due? = is_integer(state.next_poll_due_at_ms) and state.next_poll_due_at_ms <= now_ms
@@ -1172,10 +1266,12 @@ defmodule SymphonyElixir.Orchestrator do
   defp integrate_codex_update(running_entry, %{event: event, timestamp: timestamp} = update) do
     token_delta = extract_token_delta(running_entry, update)
     codex_input_tokens = Map.get(running_entry, :codex_input_tokens, 0)
+    codex_cached_input_tokens = Map.get(running_entry, :codex_cached_input_tokens, 0)
     codex_output_tokens = Map.get(running_entry, :codex_output_tokens, 0)
     codex_total_tokens = Map.get(running_entry, :codex_total_tokens, 0)
     codex_app_server_pid = Map.get(running_entry, :codex_app_server_pid)
     last_reported_input = Map.get(running_entry, :codex_last_reported_input_tokens, 0)
+    last_reported_cached = Map.get(running_entry, :codex_last_reported_cached_input_tokens, 0)
     last_reported_output = Map.get(running_entry, :codex_last_reported_output_tokens, 0)
     last_reported_total = Map.get(running_entry, :codex_last_reported_total_tokens, 0)
     turn_count = Map.get(running_entry, :turn_count, 0)
@@ -1188,9 +1284,11 @@ defmodule SymphonyElixir.Orchestrator do
         last_codex_event: event,
         codex_app_server_pid: codex_app_server_pid_for_update(codex_app_server_pid, update),
         codex_input_tokens: codex_input_tokens + token_delta.input_tokens,
+        codex_cached_input_tokens: codex_cached_input_tokens + token_delta.cached_input_tokens,
         codex_output_tokens: codex_output_tokens + token_delta.output_tokens,
         codex_total_tokens: codex_total_tokens + token_delta.total_tokens,
         codex_last_reported_input_tokens: max(last_reported_input, token_delta.input_reported),
+        codex_last_reported_cached_input_tokens: max(last_reported_cached, token_delta.cached_input_reported),
         codex_last_reported_output_tokens: max(last_reported_output, token_delta.output_reported),
         codex_last_reported_total_tokens: max(last_reported_total, token_delta.total_reported),
         turn_count: turn_count_for_update(turn_count, running_entry.session_id, update)
@@ -1282,6 +1380,7 @@ defmodule SymphonyElixir.Orchestrator do
         state.codex_totals,
         %{
           input_tokens: 0,
+          cached_input_tokens: 0,
           output_tokens: 0,
           total_tokens: 0,
           seconds_running: runtime_seconds
@@ -1314,9 +1413,14 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp apply_codex_token_delta(
          %{codex_totals: codex_totals} = state,
-         %{input_tokens: input, output_tokens: output, total_tokens: total} = token_delta
+         %{
+           input_tokens: input,
+           cached_input_tokens: cached,
+           output_tokens: output,
+           total_tokens: total
+         } = token_delta
        )
-       when is_integer(input) and is_integer(output) and is_integer(total) do
+       when is_integer(input) and is_integer(cached) and is_integer(output) and is_integer(total) do
     %{state | codex_totals: apply_token_delta(codex_totals, token_delta)}
   end
 
@@ -1336,6 +1440,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp apply_token_delta(codex_totals, token_delta) do
     input_tokens = Map.get(codex_totals, :input_tokens, 0) + token_delta.input_tokens
+
+    cached_input_tokens =
+      Map.get(codex_totals, :cached_input_tokens, 0) + Map.get(token_delta, :cached_input_tokens, 0)
+
     output_tokens = Map.get(codex_totals, :output_tokens, 0) + token_delta.output_tokens
     total_tokens = Map.get(codex_totals, :total_tokens, 0) + token_delta.total_tokens
 
@@ -1344,6 +1452,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     %{
       input_tokens: max(0, input_tokens),
+      cached_input_tokens: max(0, min(cached_input_tokens, input_tokens)),
       output_tokens: max(0, output_tokens),
       total_tokens: max(0, total_tokens),
       seconds_running: max(0, seconds_running)
@@ -1363,6 +1472,12 @@ defmodule SymphonyElixir.Orchestrator do
       ),
       compute_token_delta(
         running_entry,
+        :cached_input,
+        usage,
+        :codex_last_reported_cached_input_tokens
+      ),
+      compute_token_delta(
+        running_entry,
         :output,
         usage,
         :codex_last_reported_output_tokens
@@ -1375,12 +1490,14 @@ defmodule SymphonyElixir.Orchestrator do
       )
     }
     |> Tuple.to_list()
-    |> then(fn [input, output, total] ->
+    |> then(fn [input, cached_input, output, total] ->
       %{
         input_tokens: input.delta,
+        cached_input_tokens: cached_input.delta,
         output_tokens: output.delta,
         total_tokens: total.delta,
         input_reported: input.reported,
+        cached_input_reported: cached_input.reported,
         output_reported: output.reported,
         total_reported: total.reported
       }
@@ -1553,21 +1670,27 @@ defmodule SymphonyElixir.Orchestrator do
   defp integer_token_map?(payload) do
     token_fields = [
       :input_tokens,
+      :cached_input_tokens,
       :output_tokens,
       :total_tokens,
       :prompt_tokens,
+      :cached_tokens,
       :completion_tokens,
       :inputTokens,
+      :cachedInputTokens,
       :outputTokens,
       :totalTokens,
       :promptTokens,
       :completionTokens,
       "input_tokens",
+      "cached_input_tokens",
       "output_tokens",
       "total_tokens",
       "prompt_tokens",
+      "cached_tokens",
       "completion_tokens",
       "inputTokens",
+      "cachedInputTokens",
       "outputTokens",
       "totalTokens",
       "promptTokens",
@@ -1594,6 +1717,25 @@ defmodule SymphonyElixir.Orchestrator do
         "inputTokens",
         :inputTokens
       ])
+
+  defp get_token_usage(usage, :cached_input) do
+    payload_get(usage, [
+      "cached_input_tokens",
+      :cached_input_tokens,
+      "cached_tokens",
+      :cached_tokens,
+      "cachedInputTokens",
+      :cachedInputTokens
+    ]) ||
+      integer_like(map_at_path(usage, ["input_tokens_details", "cached_tokens"])) ||
+      integer_like(map_at_path(usage, [:input_tokens_details, :cached_tokens])) ||
+      integer_like(map_at_path(usage, ["prompt_tokens_details", "cached_tokens"])) ||
+      integer_like(map_at_path(usage, [:prompt_tokens_details, :cached_tokens])) ||
+      integer_like(map_at_path(usage, ["inputTokensDetails", "cachedTokens"])) ||
+      integer_like(map_at_path(usage, [:inputTokensDetails, :cachedTokens])) ||
+      integer_like(map_at_path(usage, ["promptTokensDetails", "cachedTokens"])) ||
+      integer_like(map_at_path(usage, [:promptTokensDetails, :cachedTokens]))
+  end
 
   defp get_token_usage(usage, :output),
     do:
@@ -1641,6 +1783,336 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp running_seconds(_started_at, _now), do: 0
+
+  defp telemetry_runtime_summary(%State{} = state) do
+    events = state.telemetry_runtime_events
+
+    %{
+      event_count: length(events),
+      last_event_at: telemetry_last_event_at(events),
+      counts_by_kind: telemetry_counts(events, :kind),
+      counts_by_status: telemetry_counts(events, :status),
+      running_count: map_size(state.running),
+      retrying_count: map_size(state.retry_attempts),
+      buffer_limit: @telemetry_runtime_limit,
+      codex_totals: state.codex_totals,
+      rate_limits: state.codex_rate_limits
+    }
+  end
+
+  defp issue_telemetry_snapshot_payload(%State{} = state, issue_identifier)
+       when is_binary(issue_identifier) do
+    with {:ok, issue_id} <- issue_id_for_identifier(state, issue_identifier) do
+      events = Map.get(state.telemetry_issue_events, issue_id, [])
+
+      %{
+        issue_id: issue_id,
+        issue_identifier: issue_identifier,
+        status: issue_runtime_status(state, issue_id),
+        summary: %{
+          event_count: length(events),
+          last_event_at: telemetry_last_event_at(events),
+          counts_by_kind: telemetry_counts(events, :kind),
+          counts_by_status: telemetry_counts(events, :status),
+          buffer_limit: @telemetry_issue_limit
+        },
+        events: events,
+        conversation: Map.get(state.codex_issue_conversations, issue_id, [])
+      }
+    else
+      :error -> nil
+    end
+  end
+
+  defp issue_id_for_identifier(%State{} = state, issue_identifier) when is_binary(issue_identifier) do
+    cond do
+      issue_id = running_issue_id_for_identifier(state.running, issue_identifier) ->
+        {:ok, issue_id}
+
+      issue_id = retry_issue_id_for_identifier(state.retry_attempts, issue_identifier) ->
+        {:ok, issue_id}
+
+      issue_id = telemetry_issue_id_for_identifier(state.telemetry_issue_events, issue_identifier) ->
+        {:ok, issue_id}
+
+      true ->
+        :error
+    end
+  end
+
+  defp running_issue_id_for_identifier(running, issue_identifier) when is_map(running) do
+    Enum.find_value(running, fn
+      {issue_id, %{identifier: ^issue_identifier}} -> issue_id
+      _ -> nil
+    end)
+  end
+
+  defp retry_issue_id_for_identifier(retry_attempts, issue_identifier) when is_map(retry_attempts) do
+    Enum.find_value(retry_attempts, fn
+      {issue_id, %{identifier: ^issue_identifier}} -> issue_id
+      _ -> nil
+    end)
+  end
+
+  defp telemetry_issue_id_for_identifier(telemetry_issue_events, issue_identifier)
+       when is_map(telemetry_issue_events) do
+    Enum.find_value(telemetry_issue_events, fn
+      {issue_id, [%{issue_identifier: ^issue_identifier} | _]} -> issue_id
+      _ -> nil
+    end)
+  end
+
+  defp issue_runtime_status(%State{} = state, issue_id) when is_binary(issue_id) do
+    cond do
+      Map.has_key?(state.running, issue_id) -> "running"
+      Map.has_key?(state.retry_attempts, issue_id) -> "retrying"
+      true -> "inactive"
+    end
+  end
+
+  defp append_session_exit_telemetry(%State{} = state, issue_id, running_entry, reason)
+       when is_binary(issue_id) and is_map(running_entry) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    session_id = running_entry_session_id(running_entry)
+
+    {status, summary} =
+      case reason do
+        :normal -> {"completed", "agent session completed"}
+        _ -> {"failed", "agent session exited: #{inspect(reason)}"}
+      end
+
+    append_orchestrator_telemetry(state, issue_id, identifier, session_id, "session", status, summary, %{})
+  end
+
+  defp append_session_exit_telemetry(state, _issue_id, _running_entry, _reason), do: state
+
+  defp append_worker_runtime_telemetry(%State{} = state, issue_id, running_entry, runtime_info)
+       when is_binary(issue_id) and is_map(running_entry) and is_map(runtime_info) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    worker_host = runtime_info[:worker_host] || Map.get(running_entry, :worker_host) || "local"
+
+    append_orchestrator_telemetry(
+      state,
+      issue_id,
+      identifier,
+      running_entry_session_id(running_entry),
+      "worker",
+      "updated",
+      "worker runtime info updated",
+      %{worker_host: worker_host}
+    )
+  end
+
+  defp append_worker_runtime_telemetry(state, _issue_id, _running_entry, _runtime_info), do: state
+
+  defp append_codex_telemetry(%State{} = state, issue_id, running_entry, update, token_delta)
+       when is_binary(issue_id) and is_map(running_entry) and is_map(update) and is_map(token_delta) do
+    if record_codex_telemetry?(update) do
+      identifier = Map.get(running_entry, :identifier, issue_id)
+
+      append_orchestrator_telemetry(
+        state,
+        issue_id,
+        identifier,
+        running_entry_session_id(running_entry),
+        "codex",
+        codex_telemetry_status(update),
+        StatusDashboard.humanize_codex_message(%{
+          event: update[:event],
+          message: update[:payload] || update[:raw]
+        }),
+        codex_telemetry_metrics(state, token_delta)
+      )
+    else
+      state
+    end
+  end
+
+  defp append_codex_telemetry(state, _issue_id, _running_entry, _update, _token_delta), do: state
+
+  defp append_codex_conversation(%State{} = state, issue_id, running_entry, update)
+       when is_binary(issue_id) and is_map(running_entry) and is_map(update) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+
+    entries =
+      state.codex_issue_conversations
+      |> Map.get(issue_id, [])
+      |> CodexConversation.append(Map.put_new(update, :session_id, running_entry_session_id(running_entry)))
+      |> limit_conversation_entries(@conversation_issue_limit)
+
+    conversations =
+      if identifier do
+        Map.put(state.codex_issue_conversations, issue_id, entries)
+      else
+        state.codex_issue_conversations
+      end
+
+    %{state | codex_issue_conversations: conversations}
+  end
+
+  defp append_codex_conversation(state, _issue_id, _running_entry, _update), do: state
+
+  defp record_codex_telemetry?(update) when is_map(update), do: !codex_streaming_update?(update)
+
+  defp codex_streaming_update?(%{event: event})
+       when event in [
+              :agent_message_delta,
+              :agent_message_content_delta,
+              :agent_reasoning_delta,
+              :reasoning_content_delta,
+              :exec_command_output_delta
+            ],
+       do: true
+
+  defp codex_streaming_update?(update) when is_map(update) do
+    codex_update_method(update) in [
+      "item/agentMessage/delta",
+      "item/plan/delta",
+      "item/reasoning/summaryTextDelta",
+      "item/reasoning/summaryPartAdded",
+      "item/reasoning/textDelta",
+      "item/commandExecution/outputDelta",
+      "item/fileChange/outputDelta",
+      "codex/event/agent_message_delta",
+      "codex/event/agent_message_content_delta",
+      "codex/event/agent_reasoning_delta",
+      "codex/event/reasoning_content_delta",
+      "codex/event/exec_command_output_delta"
+    ]
+  end
+
+  defp codex_streaming_update?(_update), do: false
+
+  defp codex_update_method(update) when is_map(update) do
+    update
+    |> codex_update_payload()
+    |> map_get_any([:method, "method"])
+  end
+
+  defp codex_update_payload(update) when is_map(update) do
+    case map_get_any(update, [:payload, "payload", :message, "message"]) do
+      %{} = payload -> payload
+      _ -> update
+    end
+  end
+
+  defp map_get_any(map, keys) when is_map(map) and is_list(keys) do
+    Enum.find_value(keys, &Map.get(map, &1))
+  end
+
+  defp codex_telemetry_status(update) when is_map(update) do
+    case update[:event] do
+      event when event in [:turn_failed, :startup_failed, :turn_ended_with_error, :tool_call_failed, :unsupported_tool_call, :malformed] -> "error"
+      event when event in [:turn_cancelled] -> "cancelled"
+      event when event in [:turn_input_required, :approval_required] -> "blocked"
+      :session_started -> "started"
+      :turn_completed -> "completed"
+      _ -> "updated"
+    end
+  end
+
+  defp codex_telemetry_metrics(%State{} = state, token_delta) when is_map(token_delta) do
+    %{
+      input_tokens: token_delta.input_tokens,
+      cached_input_tokens: token_delta.cached_input_tokens,
+      output_tokens: token_delta.output_tokens,
+      total_tokens: token_delta.total_tokens,
+      rate_limits_available: is_map(state.codex_rate_limits)
+    }
+  end
+
+  defp append_orchestrator_telemetry(%State{} = state, issue_id, issue_identifier, session_id, kind, status, summary, metrics)
+       when is_binary(kind) and is_binary(status) and is_binary(summary) do
+    event = %{
+      id: System.unique_integer([:positive, :monotonic]),
+      at: DateTime.utc_now(),
+      issue_id: issue_id,
+      issue_identifier: issue_identifier,
+      session_id: normalize_session_id(session_id),
+      kind: kind,
+      status: status,
+      summary: summary,
+      metrics: normalize_metrics(metrics)
+    }
+
+    issue_events =
+      case issue_id do
+        value when is_binary(value) ->
+          Map.update(state.telemetry_issue_events, value, [event], &limit_events([event | &1], @telemetry_issue_limit))
+
+        _ ->
+          state.telemetry_issue_events
+      end
+
+    %{
+      state
+      | telemetry_runtime_events: limit_events([event | state.telemetry_runtime_events], @telemetry_runtime_limit),
+        telemetry_issue_events: issue_events
+    }
+  end
+
+  defp append_orchestrator_telemetry(state, _issue_id, _issue_identifier, _session_id, _kind, _status, _summary, _metrics),
+    do: state
+
+  defp limit_conversation_entries(entries, limit) when is_list(entries) and is_integer(limit) and limit > 0 do
+    overflow = length(entries) - limit
+
+    if overflow > 0 do
+      Enum.drop(entries, overflow)
+    else
+      entries
+    end
+  end
+
+  defp limit_conversation_entries(entries, _limit), do: entries
+
+  defp telemetry_counts(events, key) when is_list(events) do
+    events
+    |> Enum.reduce(%{}, fn event, counts ->
+      case Map.get(event, key) do
+        value when is_binary(value) -> Map.update(counts, value, 1, &(&1 + 1))
+        _ -> counts
+      end
+    end)
+  end
+
+  defp telemetry_last_event_at([%{at: %DateTime{} = at} | _]), do: at
+  defp telemetry_last_event_at(_events), do: nil
+
+  defp limit_events(events, limit) when is_list(events) and is_integer(limit) and limit > 0 do
+    Enum.take(events, limit)
+  end
+
+  defp normalize_metrics(metrics) when is_map(metrics) do
+    metrics
+    |> Enum.reject(fn
+      {_key, nil} -> true
+      {_key, ""} -> true
+      _ -> false
+    end)
+    |> Enum.into(%{})
+  end
+
+  defp normalize_metrics(_metrics), do: %{}
+
+  defp normalize_session_id(session_id) when is_binary(session_id) and session_id != "", do: session_id
+  defp normalize_session_id(_session_id), do: nil
+
+  defp running_session_id(%State{} = state, issue_id) when is_binary(issue_id) do
+    case Map.get(state.running, issue_id) do
+      %{session_id: session_id} when is_binary(session_id) -> session_id
+      _ -> nil
+    end
+  end
+
+  defp dispatch_summary(nil), do: "dispatch started on local worker"
+  defp dispatch_summary(worker_host), do: "dispatch started on #{worker_host}"
+
+  defp retry_summary(delay_ms, attempt, nil),
+    do: "retry scheduled in #{delay_ms}ms (attempt #{attempt})"
+
+  defp retry_summary(delay_ms, attempt, error),
+    do: "retry scheduled in #{delay_ms}ms (attempt #{attempt}): #{error}"
 
   defp integer_like(value) when is_integer(value) and value >= 0, do: value
 

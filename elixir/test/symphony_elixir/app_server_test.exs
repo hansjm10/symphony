@@ -1325,185 +1325,187 @@ defmodule SymphonyElixir.AppServerTest do
     if match?({:win32, _}, :os.type()) do
       :ok
     else
-    test_root =
-      Path.join(
-        System.tmp_dir!(),
-        "symphony-elixir-app-server-remote-ssh-#{System.unique_integer([:positive])}"
-      )
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-app-server-remote-ssh-#{System.unique_integer([:positive])}"
+        )
 
-    previous_path = System.get_env("PATH")
-    previous_trace = System.get_env("SYMP_TEST_SSH_TRACE")
+      previous_path = System.get_env("PATH")
+      previous_trace = System.get_env("SYMP_TEST_SSH_TRACE")
 
-    on_exit(fn ->
-      restore_env("PATH", previous_path)
-      restore_env("SYMP_TEST_SSH_TRACE", previous_trace)
-    end)
+      on_exit(fn ->
+        restore_env("PATH", previous_path)
+        restore_env("SYMP_TEST_SSH_TRACE", previous_trace)
+      end)
 
-    try do
-      trace_file = Path.join(test_root, "ssh.trace")
-      fake_ssh_script = Path.join(test_root, "ssh-script")
-      fake_ssh =
+      try do
+        trace_file = Path.join(test_root, "ssh.trace")
+        fake_ssh_script = Path.join(test_root, "ssh-script")
+
+        fake_ssh =
+          case :os.type() do
+            {:win32, _} -> Path.join(test_root, "ssh.cmd")
+            _ -> Path.join(test_root, "ssh")
+          end
+
+        remote_workspace = "/remote/workspaces/MT-REMOTE"
+
+        File.mkdir_p!(test_root)
+        System.put_env("SYMP_TEST_SSH_TRACE", trace_file)
+
+        path_separator =
+          case :os.type() do
+            {:win32, _} -> ";"
+            _ -> ":"
+          end
+
+        System.put_env("PATH", test_root <> path_separator <> (previous_path || ""))
+
         case :os.type() do
-          {:win32, _} -> Path.join(test_root, "ssh.cmd")
-          _ -> Path.join(test_root, "ssh")
-        end
+          {:win32, _} ->
+            fake_ssh_ps1 = Path.join(test_root, "ssh.ps1")
 
-      remote_workspace = "/remote/workspaces/MT-REMOTE"
-
-      File.mkdir_p!(test_root)
-      System.put_env("SYMP_TEST_SSH_TRACE", trace_file)
-      path_separator =
-        case :os.type() do
-          {:win32, _} -> ";"
-          _ -> ":"
-        end
-
-      System.put_env("PATH", test_root <> path_separator <> (previous_path || ""))
-
-      case :os.type() do
-        {:win32, _} ->
-          fake_ssh_ps1 = Path.join(test_root, "ssh.ps1")
-
-          File.write!(fake_ssh_ps1, """
-          $traceFile = $env:SYMP_TEST_SSH_TRACE
-          if ([string]::IsNullOrWhiteSpace($traceFile)) {
-            $traceFile = Join-Path $env:TEMP "symphony-fake-ssh.trace"
-          }
-
-          $count = 0
-          Add-Content -Path $traceFile -Value ("ARGV:" + ($args -join " "))
-
-          while (($line = [Console]::In.ReadLine()) -ne $null) {
-            $count += 1
-            Add-Content -Path $traceFile -Value ("JSON:" + $line)
-
-            switch ($count) {
-              1 { [Console]::Out.WriteLine('{"id":1,"result":{}}') }
-              2 { [Console]::Out.WriteLine('{"id":2,"result":{"thread":{"id":"thread-remote"}}}') }
-              3 { [Console]::Out.WriteLine('{"id":3,"result":{"turn":{"id":"turn-remote"}}}') }
-              4 {
-                [Console]::Out.WriteLine('{"method":"turn/completed"}')
-                exit 0
-              }
-              default { exit 0 }
+            File.write!(fake_ssh_ps1, """
+            $traceFile = $env:SYMP_TEST_SSH_TRACE
+            if ([string]::IsNullOrWhiteSpace($traceFile)) {
+              $traceFile = Join-Path $env:TEMP "symphony-fake-ssh.trace"
             }
-          }
-          """)
 
-          File.write!(
-            fake_ssh,
-            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0ssh.ps1\" %*\r\n"
-          )
+            $count = 0
+            Add-Content -Path $traceFile -Value ("ARGV:" + ($args -join " "))
 
-        _ ->
-          write_posix_script!(fake_ssh_script, """
-          #!/bin/sh
-          trace_file="${SYMP_TEST_SSH_TRACE:-/tmp/symphony-fake-ssh.trace}"
-          count=0
-          printf 'ARGV:%s\\n' "$*" >> "$trace_file"
+            while (($line = [Console]::In.ReadLine()) -ne $null) {
+              $count += 1
+              Add-Content -Path $traceFile -Value ("JSON:" + $line)
 
-          while IFS= read -r line; do
-            count=$((count + 1))
-            printf 'JSON:%s\\n' "$line" >> "$trace_file"
+              switch ($count) {
+                1 { [Console]::Out.WriteLine('{"id":1,"result":{}}') }
+                2 { [Console]::Out.WriteLine('{"id":2,"result":{"thread":{"id":"thread-remote"}}}') }
+                3 { [Console]::Out.WriteLine('{"id":3,"result":{"turn":{"id":"turn-remote"}}}') }
+                4 {
+                  [Console]::Out.WriteLine('{"method":"turn/completed"}')
+                  exit 0
+                }
+                default { exit 0 }
+              }
+            }
+            """)
 
-            case "$count" in
-              1)
-                printf '%s\\n' '{"id":1,"result":{}}'
-                ;;
-              2)
-                printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-remote"}}}'
-                ;;
-              3)
-                printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-remote"}}}'
-                ;;
-              4)
-                printf '%s\\n' '{"method":"turn/completed"}'
-                exit 0
-                ;;
-              *)
-                exit 0
-                ;;
-            esac
-          done
-          """)
+            File.write!(
+              fake_ssh,
+              "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0ssh.ps1\" %*\r\n"
+            )
 
-          File.rename!(fake_ssh_script, fake_ssh)
-          File.chmod!(fake_ssh, 0o755)
+          _ ->
+            write_posix_script!(fake_ssh_script, """
+            #!/bin/sh
+            trace_file="${SYMP_TEST_SSH_TRACE:-/tmp/symphony-fake-ssh.trace}"
+            count=0
+            printf 'ARGV:%s\\n' "$*" >> "$trace_file"
+
+            while IFS= read -r line; do
+              count=$((count + 1))
+              printf 'JSON:%s\\n' "$line" >> "$trace_file"
+
+              case "$count" in
+                1)
+                  printf '%s\\n' '{"id":1,"result":{}}'
+                  ;;
+                2)
+                  printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-remote"}}}'
+                  ;;
+                3)
+                  printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-remote"}}}'
+                  ;;
+                4)
+                  printf '%s\\n' '{"method":"turn/completed"}'
+                  exit 0
+                  ;;
+                *)
+                  exit 0
+                  ;;
+              esac
+            done
+            """)
+
+            File.rename!(fake_ssh_script, fake_ssh)
+            File.chmod!(fake_ssh, 0o755)
+        end
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: "/remote/workspaces",
+          codex_command: "fake-remote-codex app-server"
+        )
+
+        issue = %Issue{
+          id: "issue-remote",
+          identifier: "MT-REMOTE",
+          title: "Run remote app server",
+          description: "Validate ssh-backed codex startup",
+          state: "In Progress",
+          url: "https://example.org/issues/MT-REMOTE",
+          labels: ["backend"]
+        }
+
+        assert {:ok, _result} =
+                 AppServer.run(
+                   remote_workspace,
+                   "Run remote worker",
+                   issue,
+                   worker_host: "worker-01:2200"
+                 )
+
+        trace = File.read!(trace_file)
+        lines = String.split(trace, "\n", trim: true)
+
+        assert argv_line = Enum.find(lines, &String.starts_with?(&1, "ARGV:"))
+        assert argv_line =~ "-T -p 2200 worker-01 bash -lc"
+        assert argv_line =~ "cd "
+        assert argv_line =~ remote_workspace
+        assert argv_line =~ "exec "
+        assert argv_line =~ "fake-remote-codex app-server"
+
+        expected_turn_policy = %{
+          "type" => "workspaceWrite",
+          "writableRoots" => [remote_workspace],
+          "readOnlyAccess" => %{"type" => "fullAccess"},
+          "networkAccess" => false,
+          "excludeTmpdirEnvVar" => false,
+          "excludeSlashTmp" => false
+        }
+
+        assert Enum.any?(lines, fn line ->
+                 if String.starts_with?(line, "JSON:") do
+                   line
+                   |> String.trim_leading("JSON:")
+                   |> Jason.decode!()
+                   |> then(fn payload ->
+                     payload["method"] == "thread/start" &&
+                       get_in(payload, ["params", "cwd"]) == remote_workspace
+                   end)
+                 else
+                   false
+                 end
+               end)
+
+        assert Enum.any?(lines, fn line ->
+                 if String.starts_with?(line, "JSON:") do
+                   line
+                   |> String.trim_leading("JSON:")
+                   |> Jason.decode!()
+                   |> then(fn payload ->
+                     payload["method"] == "turn/start" &&
+                       get_in(payload, ["params", "cwd"]) == remote_workspace &&
+                       get_in(payload, ["params", "sandboxPolicy"]) == expected_turn_policy
+                   end)
+                 else
+                   false
+                 end
+               end)
+      after
+        File.rm_rf(test_root)
       end
-
-      write_workflow_file!(Workflow.workflow_file_path(),
-        workspace_root: "/remote/workspaces",
-        codex_command: "fake-remote-codex app-server"
-      )
-
-      issue = %Issue{
-        id: "issue-remote",
-        identifier: "MT-REMOTE",
-        title: "Run remote app server",
-        description: "Validate ssh-backed codex startup",
-        state: "In Progress",
-        url: "https://example.org/issues/MT-REMOTE",
-        labels: ["backend"]
-      }
-
-      assert {:ok, _result} =
-               AppServer.run(
-                 remote_workspace,
-                 "Run remote worker",
-                 issue,
-                 worker_host: "worker-01:2200"
-               )
-
-      trace = File.read!(trace_file)
-      lines = String.split(trace, "\n", trim: true)
-
-      assert argv_line = Enum.find(lines, &String.starts_with?(&1, "ARGV:"))
-      assert argv_line =~ "-T -p 2200 worker-01 bash -lc"
-      assert argv_line =~ "cd "
-      assert argv_line =~ remote_workspace
-      assert argv_line =~ "exec "
-      assert argv_line =~ "fake-remote-codex app-server"
-
-      expected_turn_policy = %{
-        "type" => "workspaceWrite",
-        "writableRoots" => [remote_workspace],
-        "readOnlyAccess" => %{"type" => "fullAccess"},
-        "networkAccess" => false,
-        "excludeTmpdirEnvVar" => false,
-        "excludeSlashTmp" => false
-      }
-
-      assert Enum.any?(lines, fn line ->
-               if String.starts_with?(line, "JSON:") do
-                 line
-                 |> String.trim_leading("JSON:")
-                 |> Jason.decode!()
-                 |> then(fn payload ->
-                   payload["method"] == "thread/start" &&
-                     get_in(payload, ["params", "cwd"]) == remote_workspace
-                 end)
-               else
-                 false
-               end
-             end)
-
-      assert Enum.any?(lines, fn line ->
-               if String.starts_with?(line, "JSON:") do
-                 line
-                 |> String.trim_leading("JSON:")
-                 |> Jason.decode!()
-                 |> then(fn payload ->
-                   payload["method"] == "turn/start" &&
-                     get_in(payload, ["params", "cwd"]) == remote_workspace &&
-                     get_in(payload, ["params", "sandboxPolicy"]) == expected_turn_policy
-                 end)
-               else
-                 false
-               end
-             end)
-    after
-      File.rm_rf(test_root)
-    end
     end
   end
 
@@ -1554,12 +1556,16 @@ defmodule SymphonyElixir.AppServerTest do
         :ok
 
       cmd_executable ->
-        command = "codex app-server && echo ready"
+        for command <- [
+              "codex app-server && echo ready",
+              "codex app-server & echo ready",
+              "$env:PATH='C:/bin'; codex app-server"
+            ] do
+          assert {:ok, executable, ["/d", "/s", "/c", ^command]} =
+                   AppServer.local_port_command_for_test(command, {:win32, :nt})
 
-        assert {:ok, executable, ["/d", "/s", "/c", ^command]} =
-                 AppServer.local_port_command_for_test(command, {:win32, :nt})
-
-        assert Path.expand(executable) == Path.expand(cmd_executable)
+          assert Path.expand(executable) == Path.expand(cmd_executable)
+        end
     end
   end
 end
