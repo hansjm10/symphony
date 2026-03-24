@@ -12,6 +12,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
+  @startup_cleanup_timeout_ms 15_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @telemetry_runtime_limit 200
@@ -37,6 +38,11 @@ defmodule SymphonyElixir.Orchestrator do
       :poll_check_in_progress,
       :tick_timer_ref,
       :tick_token,
+      :startup_cleanup_fun,
+      :startup_cleanup_timeout_ms,
+      :startup_cleanup_task_ref,
+      :startup_cleanup_task_pid,
+      :startup_cleanup_timeout_ref,
       running: %{},
       completed: MapSet.new(),
       claimed: MapSet.new(),
@@ -56,7 +62,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
     now_ms = System.monotonic_time(:millisecond)
     config = Config.settings!()
 
@@ -67,6 +73,11 @@ defmodule SymphonyElixir.Orchestrator do
       poll_check_in_progress: false,
       tick_timer_ref: nil,
       tick_token: nil,
+      startup_cleanup_fun: Keyword.get(opts, :startup_cleanup_fun, &run_terminal_workspace_cleanup/0),
+      startup_cleanup_timeout_ms: Keyword.get(opts, :startup_cleanup_timeout_ms, @startup_cleanup_timeout_ms),
+      startup_cleanup_task_ref: nil,
+      startup_cleanup_task_pid: nil,
+      startup_cleanup_timeout_ref: nil,
       codex_totals: @empty_codex_totals,
       codex_rate_limits: nil,
       telemetry_runtime_events: [],
@@ -74,7 +85,7 @@ defmodule SymphonyElixir.Orchestrator do
       codex_issue_conversations: %{}
     }
 
-    run_terminal_workspace_cleanup()
+    send(self(), :run_startup_terminal_workspace_cleanup)
     state = schedule_tick(state, 0)
 
     {:ok, state}
@@ -124,6 +135,44 @@ defmodule SymphonyElixir.Orchestrator do
 
     notify_dashboard()
     {:noreply, state}
+  end
+
+  def handle_info(:run_startup_terminal_workspace_cleanup, %State{} = state) do
+    {:noreply, maybe_start_startup_cleanup(state)}
+  end
+
+  def handle_info({ref, result}, %State{startup_cleanup_task_ref: ref} = state)
+      when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_startup_cleanup(state, result)}
+  end
+
+  def handle_info(
+        {:startup_cleanup_timeout, ref},
+        %State{startup_cleanup_task_ref: ref, startup_cleanup_task_pid: pid} = state
+      )
+      when is_reference(ref) do
+    if is_pid(pid) do
+      Task.Supervisor.terminate_child(SymphonyElixir.TaskSupervisor, pid)
+    end
+
+    Logger.warning("Startup terminal workspace cleanup timed out after #{state.startup_cleanup_timeout_ms}ms; continuing without blocking startup")
+
+    {:noreply, clear_startup_cleanup(state)}
+  end
+
+  def handle_info({:startup_cleanup_timeout, _ref}, state), do: {:noreply, state}
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %State{startup_cleanup_task_ref: ref} = state
+      )
+      when is_reference(ref) do
+    if reason != :normal do
+      Logger.warning("Startup terminal workspace cleanup failed: #{inspect(reason)}; continuing without blocking startup")
+    end
+
+    {:noreply, clear_startup_cleanup(state)}
   end
 
   def handle_info(
@@ -921,20 +970,84 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
 
+  defp maybe_start_startup_cleanup(%State{startup_cleanup_task_ref: ref} = state)
+       when is_reference(ref),
+       do: state
+
+  defp maybe_start_startup_cleanup(%State{} = state) do
+    Logger.info("Scheduling startup terminal workspace cleanup in the background")
+
+    task =
+      Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+        Logger.info("Startup terminal workspace cleanup started")
+        state.startup_cleanup_fun.()
+      end)
+
+    timeout_ref =
+      Process.send_after(
+        self(),
+        {:startup_cleanup_timeout, task.ref},
+        state.startup_cleanup_timeout_ms
+      )
+
+    %{
+      state
+      | startup_cleanup_task_ref: task.ref,
+        startup_cleanup_task_pid: task.pid,
+        startup_cleanup_timeout_ref: timeout_ref
+    }
+  end
+
+  defp finish_startup_cleanup(%State{} = state, {:ok, cleaned_count})
+       when is_integer(cleaned_count) and cleaned_count >= 0 do
+    Logger.info("Startup terminal workspace cleanup completed cleaned_issue_count=#{cleaned_count}")
+
+    clear_startup_cleanup(state)
+  end
+
+  defp finish_startup_cleanup(%State{} = state, {:error, reason}) do
+    Logger.warning("Skipping startup terminal workspace cleanup; failed to fetch terminal issues: #{inspect(reason)}")
+
+    clear_startup_cleanup(state)
+  end
+
+  defp finish_startup_cleanup(%State{} = state, other) do
+    Logger.warning("Startup terminal workspace cleanup returned unexpected result: #{inspect(other)}")
+
+    clear_startup_cleanup(state)
+  end
+
+  defp clear_startup_cleanup(%State{} = state) do
+    if is_reference(state.startup_cleanup_timeout_ref) do
+      Process.cancel_timer(state.startup_cleanup_timeout_ref)
+    end
+
+    %{
+      state
+      | startup_cleanup_task_ref: nil,
+        startup_cleanup_task_pid: nil,
+        startup_cleanup_timeout_ref: nil
+    }
+  end
+
   defp run_terminal_workspace_cleanup do
     case Tracker.fetch_issues_by_states(Config.settings!().tracker.terminal_states) do
       {:ok, issues} ->
-        issues
-        |> Enum.each(fn
-          %Issue{identifier: identifier} when is_binary(identifier) ->
-            cleanup_issue_workspace(identifier)
+        cleaned_count =
+          issues
+          |> Enum.reduce(0, fn
+            %Issue{identifier: identifier}, acc when is_binary(identifier) ->
+              cleanup_issue_workspace(identifier)
+              acc + 1
 
-          _ ->
-            :ok
-        end)
+            _, acc ->
+              acc
+          end)
+
+        {:ok, cleaned_count}
 
       {:error, reason} ->
-        Logger.warning("Skipping startup terminal workspace cleanup; failed to fetch terminal issues: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 

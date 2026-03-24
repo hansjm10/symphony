@@ -458,6 +458,28 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert log =~ "Variable \\\"$ids\\\" got invalid value"
   end
 
+  test "linear client applies bounded timeout options to graphql requests" do
+    parent = self()
+
+    assert {:ok, %{"data" => %{"viewer" => %{"id" => "viewer-1"}}}} =
+             Client.graphql(
+               "query Viewer { viewer { id } }",
+               %{},
+               request_fun: fn payload, headers, request_options ->
+                 send(parent, {:graphql_request, payload, headers, request_options})
+                 {:ok, %{status: 200, body: %{"data" => %{"viewer" => %{"id" => "viewer-1"}}}}}
+               end
+             )
+
+    assert_receive {:graphql_request, payload, headers, request_options}
+    assert payload["query"] =~ "query Viewer"
+    assert {"Authorization", "token"} in headers
+    assert {"Content-Type", "application/json"} in headers
+    assert request_options[:receive_timeout] == 10_000
+    assert request_options[:pool_timeout] == 5_000
+    assert request_options[:connect_options] == [timeout: 5_000]
+  end
+
   test "orchestrator sorts dispatch by priority then oldest created_at" do
     issue_same_priority_older = %Issue{
       id: "issue-old-high",

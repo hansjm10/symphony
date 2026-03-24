@@ -228,6 +228,96 @@ defmodule SymphonyElixir.CoreTest do
     GenServer.stop(pid)
   end
 
+  test "orchestrator startup cleanup runs asynchronously without blocking init" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+
+    orchestrator_name = Module.concat(__MODULE__, :AsyncStartupCleanupOrchestrator)
+    parent = self()
+
+    cleanup_fun = fn ->
+      send(parent, {:startup_cleanup_started, self()})
+
+      receive do
+        :release_startup_cleanup -> {:ok, 1}
+      end
+    end
+
+    started_at_ms = System.monotonic_time(:millisecond)
+
+    {:ok, pid} =
+      Orchestrator.start_link(
+        name: orchestrator_name,
+        startup_cleanup_fun: cleanup_fun,
+        startup_cleanup_timeout_ms: 200
+      )
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    assert System.monotonic_time(:millisecond) - started_at_ms < 200
+    assert_receive {:startup_cleanup_started, cleanup_pid}, 200
+    assert Process.alive?(cleanup_pid)
+
+    state = :sys.get_state(pid)
+    assert is_reference(state.startup_cleanup_task_ref)
+    assert state.startup_cleanup_task_pid == cleanup_pid
+
+    send(cleanup_pid, :release_startup_cleanup)
+    Process.sleep(50)
+
+    state = :sys.get_state(pid)
+    assert state.startup_cleanup_task_ref == nil
+    assert state.startup_cleanup_task_pid == nil
+    assert state.startup_cleanup_timeout_ref == nil
+  end
+
+  test "orchestrator startup cleanup timeout is warning-only" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+
+    orchestrator_name = Module.concat(__MODULE__, :TimedStartupCleanupOrchestrator)
+    parent = self()
+
+    cleanup_fun = fn ->
+      send(parent, {:startup_cleanup_started, self()})
+
+      receive do
+        :never -> :ok
+      end
+    end
+
+    log =
+      capture_log(fn ->
+        {:ok, pid} =
+          Orchestrator.start_link(
+            name: orchestrator_name,
+            startup_cleanup_fun: cleanup_fun,
+            startup_cleanup_timeout_ms: 10
+          )
+
+        on_exit(fn ->
+          if Process.alive?(pid) do
+            Process.exit(pid, :normal)
+          end
+        end)
+
+        assert_receive {:startup_cleanup_started, cleanup_pid}, 200
+        Process.sleep(50)
+        refute Process.alive?(cleanup_pid)
+
+        state = :sys.get_state(pid)
+        assert state.startup_cleanup_task_ref == nil
+        assert state.startup_cleanup_task_pid == nil
+        assert state.startup_cleanup_timeout_ref == nil
+      end)
+
+    assert log =~ "Startup terminal workspace cleanup timed out"
+  end
+
   test "linear issue state reconciliation fetch with no running issues is a no-op" do
     assert {:ok, []} = Client.fetch_issue_states_by_ids([])
   end

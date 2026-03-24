@@ -8,6 +8,8 @@ defmodule SymphonyElixir.Linear.Client do
 
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
+  @linear_connect_timeout_ms 5_000
+  @linear_receive_timeout_ms 10_000
 
   @query """
   query SymphonyLinearPoll($projectSlug: String!, $stateNames: [String!]!, $first: Int!, $relationFirst: Int!, $after: String) {
@@ -164,10 +166,12 @@ defmodule SymphonyElixir.Linear.Client do
   def graphql(query, variables \\ %{}, opts \\ [])
       when is_binary(query) and is_map(variables) and is_list(opts) do
     payload = build_graphql_payload(query, variables, Keyword.get(opts, :operation_name))
-    request_fun = Keyword.get(opts, :request_fun, &post_graphql_request/2)
+    request_fun = Keyword.get(opts, :request_fun, &post_graphql_request/3)
+    request_options = graphql_request_options()
 
     with {:ok, headers} <- graphql_headers(),
-         {:ok, %{status: 200, body: body}} <- request_fun.(payload, headers) do
+         {:ok, %{status: 200, body: body}} <-
+           dispatch_graphql_request(request_fun, payload, headers, request_options) do
       {:ok, body}
     else
       {:ok, response} ->
@@ -394,12 +398,27 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
-  defp post_graphql_request(payload, headers) do
-    Req.post(Config.settings!().tracker.endpoint,
-      headers: headers,
-      json: payload,
-      connect_options: [timeout: 30_000]
-    )
+  defp dispatch_graphql_request(request_fun, payload, headers, request_options)
+       when is_function(request_fun, 3) do
+    request_fun.(payload, headers, request_options)
+  end
+
+  defp dispatch_graphql_request(request_fun, payload, headers, _request_options)
+       when is_function(request_fun, 2) do
+    request_fun.(payload, headers)
+  end
+
+  defp graphql_request_options do
+    [
+      receive_timeout: @linear_receive_timeout_ms,
+      connect_options: [timeout: @linear_connect_timeout_ms],
+      pool_timeout: @linear_connect_timeout_ms
+    ]
+  end
+
+  defp post_graphql_request(payload, headers, request_options) do
+    options = [headers: headers, json: payload] ++ request_options
+    Req.post(Config.settings!().tracker.endpoint, options)
   end
 
   defp decode_linear_response(%{"data" => %{"issues" => %{"nodes" => nodes}}}, assignee_filter) do

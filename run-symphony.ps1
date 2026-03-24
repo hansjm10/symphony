@@ -71,6 +71,43 @@ function Resolve-ToolPath {
   return Resolve-CommandPath -Name $Value
 }
 
+function Resolve-MisePath {
+  $resolved = Resolve-CommandPath -Name "mise"
+
+  if (-not [string]::IsNullOrWhiteSpace($resolved) -and (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+    return $resolved
+  }
+
+  $userProfile = [System.Environment]::GetFolderPath("UserProfile")
+
+  $fallbacks = @(
+    (Join-Path $userProfile ".local\bin\mise.exe"),
+    (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links\mise.exe")
+  )
+
+  foreach ($path in $fallbacks) {
+    if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+      return (Resolve-Path -LiteralPath $path).Path
+    }
+  }
+
+  $packageRoot = Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages"
+
+  if (Test-Path -LiteralPath $packageRoot -PathType Container) {
+    $packageMise = Get-ChildItem -LiteralPath $packageRoot -Directory -Filter "jdx.mise_*" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending |
+      ForEach-Object { Join-Path $_.FullName "mise\bin\mise.exe" } |
+      Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+      Select-Object -First 1
+
+    if (-not [string]::IsNullOrWhiteSpace($packageMise)) {
+      return (Resolve-Path -LiteralPath $packageMise).Path
+    }
+  }
+
+  return $null
+}
+
 function Test-AnyFileNewerThan {
   param(
     [Parameter(Mandatory = $true)]
@@ -124,7 +161,7 @@ if (Test-Path -LiteralPath $EnvFile) {
 }
 
 $SymphonyDir = if ($env:SYMPHONY_DIR) { $env:SYMPHONY_DIR } else { Join-Path $RootDir "elixir" }
-$MiseBin = if ($env:MISE_BIN) { Resolve-ToolPath -Value $env:MISE_BIN } else { Resolve-CommandPath -Name "mise" }
+$MiseBin = if ($env:MISE_BIN) { Resolve-ToolPath -Value $env:MISE_BIN } else { Resolve-MisePath }
 $Port = if ($env:SYMPHONY_PORT) { $env:SYMPHONY_PORT } else { "8080" }
 $BindHost = if ($env:SYMPHONY_HOST) { $env:SYMPHONY_HOST } else { "0.0.0.0" }
 $WorkflowFile = if ($env:WORKFLOW_FILE) { $env:WORKFLOW_FILE } else { Join-Path $SymphonyDir "WORKFLOW.md" }
