@@ -448,6 +448,104 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "codex review non-active exits record session-scoped handoff telemetry for each review round" do
+    issue_id = "issue-review-handoff"
+    issue_identifier = "MT-562"
+    issue = %Issue{
+      id: issue_id,
+      identifier: issue_identifier,
+      state: "In Review",
+      title: "Review handoff",
+      description: "Record a handoff before stopping the review worker",
+      labels: []
+    }
+
+    build_running_entry = fn session_id ->
+      %{
+        pid:
+          spawn(fn ->
+            receive do
+              :stop -> :ok
+            after
+              60_000 -> :ok
+            end
+          end),
+        ref: nil,
+        identifier: issue_identifier,
+        issue: %Issue{id: issue_id, identifier: issue_identifier, state: "Codex Review"},
+        session_kind: :codex_review,
+        session_id: session_id,
+        started_at: DateTime.utc_now()
+      }
+    end
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Codex Review", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"]
+    )
+
+    review_session_id_1 = "thread-review-1-turn-review-1"
+    running_entry_1 = build_running_entry.(review_session_id_1)
+
+    state =
+      %Orchestrator.State{
+        running: %{issue_id => running_entry_1},
+        claimed: MapSet.new([issue_id]),
+        codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+        retry_attempts: %{},
+        telemetry_issue_events: %{}
+      }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+    refute Map.has_key?(updated_state.running, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    refute Process.alive?(running_entry_1.pid)
+
+    first_round_handoffs =
+      updated_state.telemetry_issue_events
+      |> Map.fetch!(issue_id)
+      |> Enum.filter(&(&1.kind == "handoff"))
+
+    assert [
+             %{
+               session_id: ^review_session_id_1,
+               status: "completed",
+               summary: "codex_review handoff completed to In Review",
+               metrics: %{
+                 session_kind: "codex_review",
+                 previous_issue_state: "Codex Review",
+                 next_issue_state: "In Review"
+               }
+             }
+           ] = first_round_handoffs
+
+    review_session_id_2 = "thread-review-2-turn-review-2"
+    running_entry_2 = build_running_entry.(review_session_id_2)
+
+    second_round_state = %{
+      updated_state
+      | running: %{issue_id => running_entry_2},
+        claimed: MapSet.put(updated_state.claimed, issue_id)
+    }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], second_round_state)
+
+    refute Map.has_key?(updated_state.running, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    refute Process.alive?(running_entry_2.pid)
+
+    second_round_handoffs =
+      updated_state.telemetry_issue_events
+      |> Map.fetch!(issue_id)
+      |> Enum.filter(&(&1.kind == "handoff"))
+
+    assert Enum.map(second_round_handoffs, & &1.session_id) == [
+             review_session_id_2,
+             review_session_id_1
+           ]
+  end
+
   test "missing running issues stop active agents without cleaning the workspace" do
     test_root =
       Path.join(
@@ -1096,6 +1194,27 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt == "Retry #2"
   end
 
+  test "prompt builder renders codex review prompts independently from implementation prompts" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Codex Review", "Rework"],
+      prompt: "Implement {{ issue.identifier }} as {{ session_kind }}",
+      codex_review_enabled: true,
+      codex_review_prompt: "Review {{ issue.identifier }} as {{ session_kind }}"
+    )
+
+    issue = %Issue{
+      identifier: "MT-202",
+      title: "Review prompt",
+      description: "Use the dedicated review template",
+      state: "Codex Review",
+      url: "https://example.org/issues/MT-202",
+      labels: []
+    }
+
+    assert PromptBuilder.build_prompt(issue) == "Implement MT-202 as implementation"
+    assert PromptBuilder.build_prompt(issue, session_kind: :codex_review) == "Review MT-202 as codex_review"
+  end
+
   test "agent runner keeps workspace after successful codex run" do
     test_root =
       Path.join(
@@ -1398,6 +1517,122 @@ defmodule SymphonyElixir.CoreTest do
       System.delete_env("SYMP_TEST_CODEx_TRACE")
       File.rm_rf(test_root)
     end
+  end
+
+  test "agent runner hands off to a fresh session when the issue enters codex review" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Codex Review", "Rework"],
+      codex_review_enabled: true,
+      codex_review_state: "Codex Review"
+    )
+
+    issue = %Issue{
+      id: "issue-review-handoff",
+      identifier: "MT-249",
+      title: "Review handoff",
+      description: "Switch into codex review",
+      state: "In Progress"
+    }
+
+    state_fetcher = fn [_issue_id] ->
+      {:ok,
+       [
+         %Issue{
+           issue
+           | state: "Codex Review"
+         }
+       ]}
+    end
+
+    assert {:handoff, %Issue{state: "Codex Review"}, :codex_review} =
+             AgentRunner.continuation_action_for_test(issue, :implementation, state_fetcher)
+  end
+
+  test "agent runner hands off to rework when codex review finds actionable issues" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Codex Review", "Rework"],
+      codex_review_enabled: true,
+      codex_review_state: "Codex Review"
+    )
+
+    issue = %Issue{
+      id: "issue-review-to-rework",
+      identifier: "MT-250",
+      title: "Review to rework",
+      description: "Findings require a fix loop",
+      state: "Codex Review"
+    }
+
+    state_fetcher = fn [_issue_id] ->
+      {:ok,
+       [
+         %Issue{
+           issue
+           | state: "Rework"
+         }
+       ]}
+    end
+
+    assert {:handoff, %Issue{state: "Rework"}, :rework} =
+             AgentRunner.continuation_action_for_test(issue, :codex_review, state_fetcher)
+  end
+
+  test "agent runner hands off back to codex review when rework is ready for review" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Codex Review", "Rework"],
+      codex_review_enabled: true,
+      codex_review_state: "Codex Review"
+    )
+
+    issue = %Issue{
+      id: "issue-rework-to-review",
+      identifier: "MT-251",
+      title: "Rework to review",
+      description: "Fixes are ready for another review pass",
+      state: "Rework"
+    }
+
+    state_fetcher = fn [_issue_id] ->
+      {:ok,
+       [
+         %Issue{
+           issue
+           | state: "Codex Review"
+         }
+       ]}
+    end
+
+    assert {:handoff, %Issue{state: "Codex Review"}, :codex_review} =
+             AgentRunner.continuation_action_for_test(issue, :rework, state_fetcher)
+  end
+
+  test "agent runner stops once codex review exits to in review" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Codex Review", "Rework"],
+      codex_review_enabled: true,
+      codex_review_state: "Codex Review"
+    )
+
+    issue = %Issue{
+      id: "issue-review-complete",
+      identifier: "MT-252",
+      title: "Review complete",
+      description: "Clean review exits active orchestration",
+      state: "Codex Review"
+    }
+
+    state_fetcher = fn [_issue_id] ->
+      {:ok,
+       [
+         %Issue{
+           issue
+           | state: "In Review"
+         }
+       ]}
+    end
+
+    assert {:done, %Issue{state: "In Review"}} =
+             AgentRunner.continuation_action_for_test(issue, :codex_review, state_fetcher)
   end
 
   test "agent runner stops continuing once agent.max_turns is reached" do

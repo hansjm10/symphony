@@ -9,15 +9,18 @@ defmodule SymphonyElixir.PromptBuilder do
 
   @spec build_prompt(SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
+    session_kind = Keyword.get(opts, :session_kind, :implementation)
+
     template =
       Workflow.current()
-      |> prompt_template!()
+      |> prompt_template!(session_kind)
       |> parse_template!()
 
     template
     |> Solid.render!(
       %{
         "attempt" => Keyword.get(opts, :attempt),
+        "session_kind" => Config.session_kind_name(session_kind),
         "issue" => issue |> Map.from_struct() |> to_solid_map()
       },
       @render_opts
@@ -25,9 +28,13 @@ defmodule SymphonyElixir.PromptBuilder do
     |> IO.iodata_to_binary()
   end
 
-  defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
+  defp prompt_template!({:ok, workflow}, session_kind) when is_map(workflow) do
+    workflow
+    |> prompt_template_for(session_kind)
+    |> default_prompt(session_kind)
+  end
 
-  defp prompt_template!({:error, reason}) do
+  defp prompt_template!({:error, reason}, _session_kind) do
     raise RuntimeError, "workflow_unavailable: #{inspect(reason)}"
   end
 
@@ -54,11 +61,17 @@ defmodule SymphonyElixir.PromptBuilder do
   defp to_solid_value(value) when is_list(value), do: Enum.map(value, &to_solid_value/1)
   defp to_solid_value(value), do: value
 
-  defp default_prompt(prompt) when is_binary(prompt) do
+  defp prompt_template_for(%{review_prompt_template: prompt}, :codex_review), do: prompt
+  defp prompt_template_for(%{prompt_template: prompt}, _session_kind), do: prompt
+  defp prompt_template_for(_workflow, _session_kind), do: nil
+
+  defp default_prompt(prompt, session_kind) when is_binary(prompt) do
     if String.trim(prompt) == "" do
-      Config.workflow_prompt()
+      Config.workflow_prompt(session_kind)
     else
       prompt
     end
   end
+
+  defp default_prompt(_prompt, session_kind), do: Config.workflow_prompt(session_kind)
 end

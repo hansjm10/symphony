@@ -60,13 +60,8 @@ defmodule SymphonyElixir.WorkflowStore do
 
   @impl true
   def handle_call(:current, _from, %State{} = state) do
-    case reload_state(state) do
-      {:ok, new_state} ->
-        {:reply, {:ok, new_state.workflow}, new_state}
-
-      {:error, _reason, new_state} ->
-        {:reply, {:ok, new_state.workflow}, new_state}
-    end
+    # Keep reads constant-time. Background polling and force_reload own reload work.
+    {:reply, {:ok, state.workflow}, state}
   end
 
   def handle_call(:force_reload, _from, %State{} = state) do

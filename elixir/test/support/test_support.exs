@@ -186,6 +186,11 @@ defmodule SymphonyElixir.TestSupport do
           codex_turn_timeout_ms: 3_600_000,
           codex_read_timeout_ms: 5_000,
           codex_stall_timeout_ms: 300_000,
+          codex_review_enabled: nil,
+          codex_review_state: nil,
+          codex_review_command: nil,
+          codex_review_max_turns: nil,
+          codex_review_prompt: nil,
           hook_after_create: nil,
           hook_before_run: nil,
           hook_after_run: nil,
@@ -223,6 +228,11 @@ defmodule SymphonyElixir.TestSupport do
     codex_turn_timeout_ms = Keyword.get(config, :codex_turn_timeout_ms)
     codex_read_timeout_ms = Keyword.get(config, :codex_read_timeout_ms)
     codex_stall_timeout_ms = Keyword.get(config, :codex_stall_timeout_ms)
+    codex_review_enabled = Keyword.get(config, :codex_review_enabled)
+    codex_review_state = Keyword.get(config, :codex_review_state)
+    codex_review_command = Keyword.get(config, :codex_review_command)
+    codex_review_max_turns = Keyword.get(config, :codex_review_max_turns)
+    codex_review_prompt = Keyword.get(config, :codex_review_prompt)
     hook_after_create = Keyword.get(config, :hook_after_create)
     hook_before_run = Keyword.get(config, :hook_before_run)
     hook_after_run = Keyword.get(config, :hook_after_run)
@@ -264,6 +274,13 @@ defmodule SymphonyElixir.TestSupport do
         "  turn_timeout_ms: #{yaml_value(codex_turn_timeout_ms)}",
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
+        codex_review_yaml(
+          codex_review_enabled,
+          codex_review_state,
+          codex_review_command,
+          codex_review_max_turns,
+          codex_review_prompt
+        ),
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
@@ -296,6 +313,21 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp yaml_value(value), do: yaml_value(to_string(value))
+
+  defp codex_review_yaml(nil, nil, nil, nil, nil), do: nil
+
+  defp codex_review_yaml(enabled, state, command, max_turns, prompt) do
+    [
+      "codex_review:",
+      yaml_field("enabled", enabled),
+      yaml_field("state", state),
+      yaml_field("command", command),
+      yaml_field("max_turns", max_turns),
+      yaml_field("prompt", prompt)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
 
   defp hooks_yaml(nil, nil, nil, nil, timeout_ms), do: "hooks:\n  timeout_ms: #{yaml_value(timeout_ms)}"
 
@@ -348,6 +380,9 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end
+
+  defp yaml_field(_name, nil), do: nil
+  defp yaml_field(name, value), do: "  #{name}: #{yaml_value(value)}"
 
   defp hook_entry(_name, nil), do: nil
 

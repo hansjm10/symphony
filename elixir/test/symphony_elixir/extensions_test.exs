@@ -228,7 +228,12 @@ defmodule SymphonyElixir.ExtensionsTest do
     ensure_workflow_store_running()
     assert {:ok, %{prompt: "You are an agent for this repository."}} = Workflow.current()
 
-    write_workflow_file!(Workflow.workflow_file_path(), prompt: "Second prompt")
+    Workflow.workflow_file_path()
+    |> File.read!()
+    |> String.replace("You are an agent for this repository.", "Second prompt")
+    |> then(&File.write!(Workflow.workflow_file_path(), &1))
+
+    assert {:ok, %{prompt: "You are an agent for this repository."}} = Workflow.current()
     send(WorkflowStore, :poll)
 
     assert_eventually(fn ->

@@ -489,6 +489,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       ref: process_ref,
       identifier: issue.identifier,
       issue: issue,
+      session_kind: :codex_review,
       session_id: nil,
       turn_count: 0,
       last_codex_message: nil,
@@ -546,6 +547,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     snapshot = GenServer.call(pid, :snapshot)
     assert %{running: [snapshot_entry]} = snapshot
+    assert snapshot_entry.session_kind == "codex_review"
     assert snapshot_entry.codex_app_server_pid == "4242"
     assert snapshot_entry.codex_input_tokens == 12
     assert snapshot_entry.codex_cached_input_tokens == 5

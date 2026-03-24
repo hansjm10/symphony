@@ -8,6 +8,7 @@ defmodule SymphonyElixir.AgentRunner do
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
 
   @type worker_host :: String.t() | nil
+  @type session_kind :: Config.session_kind()
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, codex_update_recipient \\ nil, opts \\ []) do
@@ -24,6 +25,17 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
         raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
     end
+  end
+
+  @doc false
+  @spec continuation_action_for_test(Issue.t(), session_kind(), ([String.t()] -> term())) ::
+          {:continue, Issue.t()}
+          | {:handoff, Issue.t(), session_kind()}
+          | {:done, Issue.t()}
+          | {:error, term()}
+  def continuation_action_for_test(%Issue{} = issue, current_session_kind, issue_state_fetcher)
+      when is_function(issue_state_fetcher, 1) do
+    continue_with_issue?(issue, issue_state_fetcher, current_session_kind)
   end
 
   defp run_on_worker_hosts(issue, codex_update_recipient, opts, [worker_host | rest]) do
@@ -93,20 +105,42 @@ defmodule SymphonyElixir.AgentRunner do
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
 
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
-    max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
+    session_kind = Keyword.get(opts, :session_kind, Config.session_kind_for_issue_state(issue.state))
+    max_turns = Keyword.get(opts, :max_turns, Config.max_turns(session_kind))
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
+    session_opts = Keyword.put(opts, :session_kind, session_kind)
 
-    with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
+    with {:ok, session} <- AppServer.start_session(workspace, Keyword.merge(session_opts, worker_host: worker_host)) do
       try do
-        do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns)
+        do_run_codex_turns(
+          session,
+          workspace,
+          issue,
+          codex_update_recipient,
+          session_opts,
+          issue_state_fetcher,
+          1,
+          max_turns,
+          session_kind
+        )
       after
         AppServer.stop_session(session)
       end
     end
   end
 
-  defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
-    prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
+  defp do_run_codex_turns(
+         app_session,
+         workspace,
+         issue,
+         codex_update_recipient,
+         opts,
+         issue_state_fetcher,
+         turn_number,
+         max_turns,
+         session_kind
+       ) do
+    prompt = build_turn_prompt(issue, opts, turn_number, max_turns, session_kind)
 
     with {:ok, turn_session} <-
            AppServer.run_turn(
@@ -117,7 +151,7 @@ defmodule SymphonyElixir.AgentRunner do
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
-      case continue_with_issue?(issue, issue_state_fetcher) do
+      case continue_with_issue?(issue, issue_state_fetcher, session_kind) do
         {:continue, refreshed_issue} when turn_number < max_turns ->
           Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
 
@@ -129,11 +163,19 @@ defmodule SymphonyElixir.AgentRunner do
             opts,
             issue_state_fetcher,
             turn_number + 1,
-            max_turns
+            max_turns,
+            session_kind
           )
 
         {:continue, refreshed_issue} ->
           Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+
+          :ok
+
+        {:handoff, refreshed_issue, next_session_kind} ->
+          Logger.info(
+            "Handing off #{issue_context(refreshed_issue)} from session_kind=#{Config.session_kind_name(session_kind)} to session_kind=#{Config.session_kind_name(next_session_kind)} in a fresh app-server session"
+          )
 
           :ok
 
@@ -146,9 +188,11 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp build_turn_prompt(issue, opts, 1, _max_turns), do: PromptBuilder.build_prompt(issue, opts)
+  defp build_turn_prompt(issue, opts, 1, _max_turns, session_kind) do
+    PromptBuilder.build_prompt(issue, Keyword.put(opts, :session_kind, session_kind))
+  end
 
-  defp build_turn_prompt(_issue, _opts, turn_number, max_turns) do
+  defp build_turn_prompt(_issue, _opts, turn_number, max_turns, _session_kind) do
     """
     Continuation guidance:
 
@@ -160,11 +204,18 @@ defmodule SymphonyElixir.AgentRunner do
     """
   end
 
-  defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do
+  defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher, current_session_kind)
+       when is_binary(issue_id) do
     case issue_state_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
         if active_issue_state?(refreshed_issue.state) do
-          {:continue, refreshed_issue}
+          refreshed_session_kind = Config.session_kind_for_issue_state(refreshed_issue.state)
+
+          if refreshed_session_kind == current_session_kind do
+            {:continue, refreshed_issue}
+          else
+            {:handoff, refreshed_issue, refreshed_session_kind}
+          end
         else
           {:done, refreshed_issue}
         end
@@ -177,7 +228,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp continue_with_issue?(issue, _issue_state_fetcher), do: {:done, issue}
+  defp continue_with_issue?(issue, _issue_state_fetcher, _current_session_kind), do: {:done, issue}
 
   defp active_issue_state?(state_name) when is_binary(state_name) do
     normalized_state = normalize_issue_state(state_name)

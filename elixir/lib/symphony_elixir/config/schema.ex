@@ -239,6 +239,81 @@ defmodule SymphonyElixir.Config.Schema do
     defp validate_codex_command_value(_value), do: [command: "must be a string or shell map"]
   end
 
+  defmodule CodexReview do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    alias SymphonyElixir.Config.Schema.StringOrMap
+
+    @primary_key false
+    embedded_schema do
+      field(:enabled, :boolean, default: false)
+      field(:state, :string, default: "Codex Review")
+      field(:command, StringOrMap)
+      field(:max_turns, :integer, default: 1)
+      field(:prompt, :string)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:enabled, :state, :command, :max_turns, :prompt], empty_values: [])
+      |> validate_review_state()
+      |> validate_review_command()
+      |> validate_number(:max_turns, greater_than: 0)
+    end
+
+    defp validate_review_state(changeset) do
+      review_enabled? = get_field(changeset, :enabled) == true
+      review_state = get_field(changeset, :state)
+
+      if review_enabled? and (!is_binary(review_state) or String.trim(review_state) == "") do
+        add_error(changeset, :state, "can't be blank when codex review is enabled")
+      else
+        changeset
+      end
+    end
+
+    defp validate_review_command(changeset) do
+      validate_change(changeset, :command, fn :command, value ->
+        validate_review_command_value(value)
+      end)
+    end
+
+    defp validate_review_command_value(nil), do: []
+    defp validate_review_command_value(value) when is_binary(value), do: []
+
+    defp validate_review_command_value(value) when is_map(value) do
+      normalized_map =
+        Map.new(value, fn {key, command_value} ->
+          {to_string(key), command_value}
+        end)
+
+      invalid_keys =
+        normalized_map
+        |> Map.keys()
+        |> Enum.reject(&(&1 in ["pwsh", "sh", "windows", "posix"]))
+        |> Enum.sort()
+
+      cond do
+        map_size(normalized_map) == 0 ->
+          [command: "must define at least one shell command"]
+
+        invalid_keys != [] ->
+          [command: "must only contain sh, pwsh, posix, and windows keys"]
+
+        Enum.any?(normalized_map, fn {_key, command_value} -> not is_binary(command_value) end) ->
+          [command: "must contain string shell commands"]
+
+        true ->
+          []
+      end
+    end
+
+    defp validate_review_command_value(_value), do: [command: "must be a string or shell map"]
+  end
+
   defmodule Hooks do
     @moduledoc false
     use Ecto.Schema
@@ -349,6 +424,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:codex_review, CodexReview, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
@@ -441,6 +517,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
+    |> cast_embed(:codex_review, with: &CodexReview.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
@@ -465,7 +542,12 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    codex_review = %{
+      settings.codex_review
+      | command: normalize_string_or_map(settings.codex_review.command)
+    }
+
+    %{settings | tracker: tracker, workspace: workspace, codex: codex, codex_review: codex_review}
   end
 
   defp normalize_keys(value) when is_map(value) do

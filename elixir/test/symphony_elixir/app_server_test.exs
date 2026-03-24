@@ -121,6 +121,61 @@ defmodule SymphonyElixir.AppServerTest do
              )
   end
 
+  test "app server uses codex review command overrides for review sessions" do
+    posix_command = "PATH=\"$HOME/.local/bin:$PATH\" codex app-server"
+    windows_command = "$env:PATH=\"$HOME/.local/bin;$env:PATH\"; codex app-server"
+    posix_review_command = "PATH=\"$HOME/.local/bin:$PATH\" codex review app-server"
+    windows_review_command = "$env:PATH=\"$HOME/.local/bin;$env:PATH\"; codex review app-server"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Codex Review", "Rework"],
+      codex_command: %{
+        posix: posix_command,
+        windows: windows_command
+      },
+      codex_review_enabled: true,
+      codex_review_command: %{
+        posix: posix_review_command,
+        windows: windows_review_command
+      }
+    )
+
+    shell_resolver = fn command, resolver_opts ->
+      family = Keyword.fetch!(resolver_opts, :family)
+
+      shell =
+        case family do
+          :posix ->
+            %{family: :posix, command_name: "bash", executable: "/bin/bash", args_prefix: ["-lc"]}
+
+          :windows ->
+            %{family: :windows, command_name: "pwsh", executable: "pwsh", args_prefix: ["-NoProfile", "-Command"]}
+        end
+
+      command_key =
+        case family do
+          :posix -> "posix"
+          :windows -> "windows"
+        end
+
+      {:ok, shell, Map.fetch!(command, command_key)}
+    end
+
+    assert {:ok, %{command: ^posix_review_command}} =
+             AppServer.local_launch_spec_for_test(
+               session_kind: :codex_review,
+               host_shell_family: :posix,
+               shell_resolver: shell_resolver
+             )
+
+    assert {:ok, %{command: ^windows_review_command}} =
+             AppServer.local_launch_spec_for_test(
+               session_kind: :codex_review,
+               host_shell_family: :windows,
+               shell_resolver: shell_resolver
+             )
+  end
+
   test "app server passes explicit turn sandbox policies through unchanged" do
     test_root =
       Path.join(

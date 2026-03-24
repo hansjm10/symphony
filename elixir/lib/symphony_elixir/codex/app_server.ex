@@ -21,6 +21,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           thread_sandbox: String.t(),
           turn_sandbox_policy: map(),
           thread_id: String.t(),
+          session_kind: Config.session_kind(),
           workspace: Path.t(),
           worker_host: String.t() | nil
         }
@@ -39,6 +40,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   @spec start_session(Path.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
+    session_kind = Keyword.get(opts, :session_kind, :implementation)
 
     with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host),
          {:ok, port} <- start_port(expanded_workspace, worker_host, opts) do
@@ -55,6 +57,7 @@ defmodule SymphonyElixir.Codex.AppServer do
            thread_sandbox: session_policies.thread_sandbox,
            turn_sandbox_policy: session_policies.turn_sandbox_policy,
            thread_id: thread_id,
+           session_kind: session_kind,
            workspace: expanded_workspace,
            worker_host: worker_host
          }}
@@ -75,6 +78,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           auto_approve_requests: auto_approve_requests,
           turn_sandbox_policy: turn_sandbox_policy,
           thread_id: thread_id,
+          session_kind: session_kind,
           workspace: workspace
         },
         prompt,
@@ -99,7 +103,8 @@ defmodule SymphonyElixir.Codex.AppServer do
           %{
             session_id: session_id,
             thread_id: thread_id,
-            turn_id: turn_id
+            turn_id: turn_id,
+            session_kind: Config.session_kind_name(session_kind)
           },
           metadata
         )
@@ -222,13 +227,17 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, worker_host, _opts) when is_binary(worker_host) do
-    with {:ok, remote_command} <- remote_launch_command(workspace) do
+  defp start_port(workspace, worker_host, opts) when is_binary(worker_host) do
+    session_kind = Keyword.get(opts, :session_kind, :implementation)
+
+    with {:ok, remote_command} <- remote_launch_command(workspace, session_kind) do
       SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
     end
   end
 
   defp resolve_local_launch_spec(opts) do
+    session_kind = Keyword.get(opts, :session_kind, :implementation)
+
     family_opts =
       case Keyword.get(opts, :host_shell_family, Application.get_env(:symphony_elixir, :test_host_shell_family_override)) do
         family when family in [:posix, :windows] -> [family: family]
@@ -240,9 +249,11 @@ defmodule SymphonyElixir.Codex.AppServer do
         HostShell.resolve_local_command(command, resolver_opts)
       end)
 
-    case shell_resolver.(Config.settings!().codex.command, Keyword.merge(family_opts, label: "Codex command")) do
+    command = Config.codex_command(session_kind)
+
+    case shell_resolver.(command, Keyword.merge(family_opts, label: "Codex command")) do
       {:ok, shell, command} ->
-        {:ok, %{shell: shell, command: command, raw_command: Config.settings!().codex.command}}
+        {:ok, %{shell: shell, command: command, raw_command: Config.codex_command(session_kind)}}
 
       {:error, message, status} ->
         {:error, {:codex_shell_error, message, status}}
@@ -410,8 +421,8 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp maybe_hide_windows_console(port_opts, _hide_console?), do: port_opts
 
-  defp remote_launch_command(workspace) when is_binary(workspace) do
-    with {:ok, command} <- resolve_remote_launch_command() do
+  defp remote_launch_command(workspace, session_kind) when is_binary(workspace) do
+    with {:ok, command} <- resolve_remote_launch_command(session_kind) do
       {:ok,
        [
          "cd #{shell_escape(workspace)}",
@@ -421,8 +432,8 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp resolve_remote_launch_command do
-    case HostShell.resolve_remote_posix_command(Config.settings!().codex.command, label: "Codex command") do
+  defp resolve_remote_launch_command(session_kind) do
+    case HostShell.resolve_remote_posix_command(Config.codex_command(session_kind), label: "Codex command") do
       {:ok, command} -> {:ok, command}
       {:error, message, status} -> {:error, {:codex_shell_error, message, status}}
     end

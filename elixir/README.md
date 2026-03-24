@@ -19,6 +19,8 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
    workspace
 4. Sends a workflow prompt to Codex
 5. Keeps Codex working on the issue until the work is done
+6. Optionally starts a fresh review-only Codex app-server session when an issue enters a configured
+   `Codex Review` Linear state
 
 During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
 skills can make raw Linear GraphQL calls.
@@ -101,6 +103,12 @@ agent:
   max_turns: 20
 codex:
   command: codex app-server
+codex_review:
+  enabled: true
+  state: "Codex Review"
+  max_turns: 1
+  prompt: |
+    You are performing a Codex Review for {{ issue.identifier }}.
 ---
 
 You are working on a Linear issue {{ issue.identifier }}.
@@ -111,6 +119,16 @@ Title: {{ issue.title }} Body: {{ issue.description }}
 Notes:
 
 - If a value is missing, defaults are used.
+- `codex_review` is optional and disabled by default.
+- `codex_review.state` is a Linear state name used to trigger a separate review-only Codex session.
+  It is not the same as human `In Review`.
+- When a run crosses into or out of the configured `codex_review.state`, Symphony stops same-thread
+  continuation and re-dispatches the issue through a fresh app-server session in the same workspace.
+- `codex_review.max_turns` defaults to `1`.
+- `codex_review.command` is optional and falls back to `codex.command` when omitted.
+- `codex_review.prompt` is optional and falls back to a built-in review-only prompt when omitted.
+- If `codex_review.enabled` is true, make sure `codex_review.state` is included in
+  `tracker.active_states`.
 - Safer Codex defaults are used when policy fields are omitted:
   - `codex.approval_policy` defaults to `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}`
   - `codex.thread_sandbox` defaults to `workspace-write`
@@ -140,6 +158,11 @@ Notes:
 ```yaml
 tracker:
   api_key: $LINEAR_API_KEY
+  active_states:
+    - Todo
+    - In Progress
+    - Codex Review
+    - Rework
 workspace:
   root: $SYMPHONY_WORKSPACE_ROOT
 hooks:
@@ -147,6 +170,13 @@ hooks:
     git clone --depth 1 "$SOURCE_REPO_URL" .
 codex:
   command: "$CODEX_BIN app-server --model gpt-5.3-codex"
+codex_review:
+  enabled: true
+  state: "Codex Review"
+  command: "$CODEX_REVIEW_BIN app-server --model gpt-5.3-codex"
+  max_turns: 1
+  prompt: |
+    Review the current workspace changes for {{ issue.identifier }} without editing files.
 ```
 
 - If `WORKFLOW.md` is missing or has invalid YAML at startup, Symphony does not boot.

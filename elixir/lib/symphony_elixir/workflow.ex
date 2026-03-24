@@ -30,7 +30,8 @@ defmodule SymphonyElixir.Workflow do
   @type loaded_workflow :: %{
           config: map(),
           prompt: String.t(),
-          prompt_template: String.t()
+          prompt_template: String.t(),
+          review_prompt_template: String.t() | nil
         }
 
   @spec current() :: {:ok, loaded_workflow()} | {:error, term()}
@@ -71,7 +72,8 @@ defmodule SymphonyElixir.Workflow do
          %{
            config: front_matter,
            prompt: prompt,
-           prompt_template: prompt
+           prompt_template: prompt,
+           review_prompt_template: review_prompt_template(front_matter)
          }}
 
       {:error, :workflow_front_matter_not_a_map} ->
@@ -120,4 +122,13 @@ defmodule SymphonyElixir.Workflow do
 
     :ok
   end
+
+  defp review_prompt_template(%{"codex_review" => %{} = codex_review}) do
+    case Map.get(codex_review, "prompt") do
+      prompt when is_binary(prompt) -> prompt
+      _ -> nil
+    end
+  end
+
+  defp review_prompt_template(_front_matter), do: nil
 end

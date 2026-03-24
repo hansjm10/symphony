@@ -71,6 +71,15 @@ codex:
   thread_sandbox: danger-full-access
   turn_sandbox_policy:
     type: dangerFullAccess
+# Optional separate review-only phase.
+# If enabled, also add "Codex Review" to tracker.active_states.
+# codex_review:
+#   enabled: true
+#   state: "Codex Review"
+#   max_turns: 1
+#   prompt: |
+#     You are performing a Codex Review for {{ issue.identifier }}.
+#     Review the current workspace changes without editing files.
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`

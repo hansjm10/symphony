@@ -436,6 +436,7 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.info("Issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
         state
+        |> append_codex_review_handoff_telemetry(issue)
         |> append_orchestrator_telemetry(issue.id, issue.identifier, running_session_id(state, issue.id), "issue", "stopped", "issue moved to non-active state", %{
           issue_state: issue.state
         })
@@ -521,6 +522,41 @@ defmodule SymphonyElixir.Orchestrator do
         release_issue_claim(state, issue_id)
     end
   end
+
+  defp append_codex_review_handoff_telemetry(%State{} = state, %Issue{id: issue_id} = issue)
+       when is_binary(issue_id) do
+    case Map.get(state.running, issue_id) do
+      %{session_kind: :codex_review} = running_entry ->
+        session_id = Map.get(running_entry, :session_id)
+        log_session_id = session_id || "n/a"
+        identifier = Map.get(running_entry, :identifier, issue.identifier)
+        previous_issue_state = get_in(running_entry, [:issue, :state])
+
+        Logger.info(
+          "Codex review handoff completed for issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{log_session_id} next_state=#{issue.state}"
+        )
+
+        append_orchestrator_telemetry(
+          state,
+          issue_id,
+          identifier,
+          session_id,
+          "handoff",
+          "completed",
+          codex_review_handoff_summary(issue.state),
+          %{
+            session_kind: Config.session_kind_name(:codex_review),
+            previous_issue_state: previous_issue_state,
+            next_issue_state: issue.state
+          }
+        )
+
+      _ ->
+        state
+    end
+  end
+
+  defp append_codex_review_handoff_telemetry(state, _issue), do: state
 
   defp reconcile_stalled_running_issues(%State{} = state) do
     timeout_ms = Config.settings!().codex.stall_timeout_ms
@@ -759,6 +795,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
     recipient = self()
+    session_kind = Config.session_kind_for_issue_state(issue.state)
 
     case select_worker_host(state, preferred_worker_host) do
       :no_worker_capacity ->
@@ -766,18 +803,26 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       worker_host ->
-        spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host)
+        spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host, session_kind)
     end
   end
 
-  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
+  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, session_kind) do
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+           AgentRunner.run(
+             issue,
+             recipient,
+             attempt: attempt,
+             worker_host: worker_host,
+             session_kind: session_kind
+           )
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
 
-        Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
+        Logger.info(
+          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} session_kind=#{Config.session_kind_name(session_kind)}"
+        )
 
         running =
           Map.put(state.running, issue.id, %{
@@ -785,6 +830,7 @@ defmodule SymphonyElixir.Orchestrator do
             ref: ref,
             identifier: issue.identifier,
             issue: issue,
+            session_kind: session_kind,
             worker_host: worker_host,
             workspace_path: nil,
             session_id: nil,
@@ -813,7 +859,8 @@ defmodule SymphonyElixir.Orchestrator do
         }
         |> append_orchestrator_telemetry(issue.id, issue.identifier, nil, "dispatch", "started", dispatch_summary(worker_host), %{
           worker_host: worker_host || "local",
-          attempt: attempt
+          attempt: attempt,
+          session_kind: Config.session_kind_name(session_kind)
         })
 
       {:error, reason} ->
@@ -1298,6 +1345,7 @@ defmodule SymphonyElixir.Orchestrator do
           issue_id: issue_id,
           identifier: metadata.identifier,
           state: metadata.issue.state,
+          session_kind: metadata |> Map.get(:session_kind, :implementation) |> Config.session_kind_name(),
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
           session_id: metadata.session_id,
@@ -1987,6 +2035,7 @@ defmodule SymphonyElixir.Orchestrator do
        when is_binary(issue_id) and is_map(running_entry) do
     identifier = Map.get(running_entry, :identifier, issue_id)
     session_id = running_entry_session_id(running_entry)
+    session_kind = running_entry |> Map.get(:session_kind, :implementation) |> Config.session_kind_name()
 
     {status, summary} =
       case reason do
@@ -1994,7 +2043,9 @@ defmodule SymphonyElixir.Orchestrator do
         _ -> {"failed", "agent session exited: #{inspect(reason)}"}
       end
 
-    append_orchestrator_telemetry(state, issue_id, identifier, session_id, "session", status, summary, %{})
+    append_orchestrator_telemetry(state, issue_id, identifier, session_id, "session", status, summary, %{
+      session_kind: session_kind
+    })
   end
 
   defp append_session_exit_telemetry(state, _issue_id, _running_entry, _reason), do: state
@@ -2220,6 +2271,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp dispatch_summary(nil), do: "dispatch started on local worker"
   defp dispatch_summary(worker_host), do: "dispatch started on #{worker_host}"
+
+  defp codex_review_handoff_summary(next_state) when is_binary(next_state),
+    do: "codex_review handoff completed to #{next_state}"
+
+  defp codex_review_handoff_summary(_next_state),
+    do: "codex_review handoff completed"
 
   defp retry_summary(delay_ms, attempt, nil),
     do: "retry scheduled in #{delay_ms}ms (attempt #{attempt})"

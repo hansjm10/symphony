@@ -1066,6 +1066,52 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert message =~ "sh, pwsh, posix, and windows"
   end
 
+  test "config supports codex review session settings and state routing" do
+    posix_review_command = "PATH=\"$HOME/.local/bin:$PATH\" codex review app-server"
+    windows_review_command = "$env:PATH=\"$HOME/.local/bin;$env:PATH\"; codex review app-server"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Codex Review", "Rework"],
+      codex_review_enabled: true,
+      codex_review_state: "Codex Review",
+      codex_review_command: %{
+        posix: posix_review_command,
+        windows: windows_review_command
+      },
+      codex_review_max_turns: 1,
+      codex_review_prompt: "Review {{ issue.identifier }} as {{ session_kind }}"
+    )
+
+    config = Config.settings!()
+
+    assert config.codex_review.enabled
+    assert config.codex_review.state == "Codex Review"
+
+    assert config.codex_review.command == %{
+             "posix" => posix_review_command,
+             "windows" => windows_review_command
+           }
+
+    assert config.codex_review.max_turns == 1
+    assert config.codex_review.prompt == "Review {{ issue.identifier }} as {{ session_kind }}"
+    assert Config.codex_command(:codex_review) == config.codex_review.command
+    assert Config.max_turns(:codex_review) == 1
+    assert Config.session_kind_for_issue_state("Codex Review") == :codex_review
+    assert Config.session_kind_for_issue_state("Rework") == :rework
+    assert Config.session_kind_for_issue_state("In Progress") == :implementation
+    assert :ok = Config.validate!()
+  end
+
+  test "config requires codex review state to be active when review is enabled" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Rework"],
+      codex_review_enabled: true,
+      codex_review_state: "Codex Review"
+    )
+
+    assert {:error, {:codex_review_state_not_active, "Codex Review"}} = Config.validate!()
+  end
+
   test "config no longer resolves legacy env: references" do
     workspace_env_var = "SYMP_WORKSPACE_ROOT_#{System.unique_integer([:positive])}"
     api_key_env_var = "SYMP_LINEAR_API_KEY_#{System.unique_integer([:positive])}"
