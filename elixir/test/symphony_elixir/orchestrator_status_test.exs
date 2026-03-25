@@ -842,7 +842,102 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     )
 
     snapshot = GenServer.call(pid, :snapshot)
-    assert snapshot.rate_limits == rate_limits
+    assert snapshot.rate_limits == %{
+             limit_id: "codex",
+             primary: %{remaining: 90, limit: 100},
+             credits: %{has_credits: false, unlimited: false}
+           }
+  end
+
+  test "orchestrator snapshot normalizes account rate limit snapshots" do
+    issue_id = "issue-rate-limits-read"
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-114",
+      title: "Rate limit read snapshot test",
+      description: "Capture account rate limit state",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-114"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :RateLimitReadOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    process_ref = make_ref()
+    started_at = DateTime.add(DateTime.utc_now(), -5, :second)
+
+    running_entry = %{
+      pid: self(),
+      ref: process_ref,
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      last_codex_event: nil,
+      last_codex_timestamp: nil,
+      last_codex_message: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    payload = %{
+      "method" => "account/rateLimits/read",
+      "result" => %{
+        "rateLimits" => %{
+          "limitId" => "codex",
+          "primary" => %{"usedPercent" => 14, "windowDurationMins" => 300, "resetsAt" => 1_774_480_320},
+          "secondary" => %{"usedPercent" => 7, "windowDurationMins" => 10_080, "resetsAt" => 1_775_063_585},
+          "credits" => %{"hasCredits" => false, "unlimited" => false, "balance" => "0"},
+          "planType" => "pro"
+        },
+        "rateLimitsByLimitId" => %{
+          "codex" => %{
+            "limitId" => "codex",
+            "primary" => %{"usedPercent" => 14, "windowDurationMins" => 300, "resetsAt" => 1_774_480_320},
+            "secondary" => %{"usedPercent" => 7, "windowDurationMins" => 10_080, "resetsAt" => 1_775_063_585},
+            "credits" => %{"hasCredits" => false, "unlimited" => false, "balance" => "0"},
+            "planType" => "pro"
+          }
+        }
+      }
+    }
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: payload,
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    snapshot = GenServer.call(pid, :snapshot)
+
+    assert snapshot.rate_limits.limit_id == "codex"
+    assert snapshot.rate_limits.plan_type == "pro"
+    assert snapshot.rate_limits.primary.used_percent == 14
+    assert snapshot.rate_limits.primary.window_duration_mins == 300
+    assert snapshot.rate_limits.secondary.used_percent == 7
+    assert snapshot.rate_limits.credits == %{has_credits: false, unlimited: false, balance: "0"}
+    assert get_in(snapshot.rate_limits, [:rate_limits_by_limit_id, "codex", :primary, :used_percent]) == 14
   end
 
   test "orchestrator token accounting prefers total_token_usage over last_token_usage in token_count payloads" do
@@ -1770,7 +1865,25 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       {"item/commandExecution/requestApproval", %{"params" => %{"parsedCmd" => "git status"}}, "command approval requested (git status)"},
       {"item/fileChange/requestApproval", %{"params" => %{"fileChangeCount" => 2}}, "file change approval requested (2 files)"},
       {"item/tool/call", %{"params" => %{"tool" => "linear_graphql"}}, "dynamic tool call requested (linear_graphql)"},
-      {"item/tool/requestUserInput", %{"params" => %{"question" => "Continue?"}}, "tool requires user input: Continue?"}
+      {"item/tool/requestUserInput", %{"params" => %{"question" => "Continue?"}}, "tool requires user input: Continue?"},
+      {"account/rateLimits/read",
+       %{
+         "result" => %{
+           "rateLimits" => %{
+             "primary" => %{"usedPercent" => 14, "windowDurationMins" => 300},
+             "secondary" => %{"usedPercent" => 7, "windowDurationMins" => 10_080}
+           }
+         }
+       }, "rate limits snapshot: primary 14% / 5h; secondary 7% / 7d"},
+      {"account/rateLimits/updated",
+       %{
+         "params" => %{
+           "rateLimits" => %{
+             "primary" => %{"usedPercent" => 14, "windowDurationMins" => 300},
+             "secondary" => %{"usedPercent" => 7, "windowDurationMins" => 10_080}
+           }
+         }
+       }, "rate limits updated: primary 14% / 5h; secondary 7% / 7d"}
     ]
 
     Enum.each(event_cases, fn {method, payload, expected_fragment} ->

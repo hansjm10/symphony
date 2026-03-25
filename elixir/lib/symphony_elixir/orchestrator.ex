@@ -1740,16 +1740,33 @@ defmodule SymphonyElixir.Orchestrator do
   defp turn_completed_usage_from_payload(_payload), do: nil
 
   defp rate_limits_from_payload(payload) when is_map(payload) do
-    direct = Map.get(payload, "rate_limits") || Map.get(payload, :rate_limits)
+    normalized = normalize_rate_limits_payload(payload)
 
     cond do
-      rate_limits_map?(direct) ->
-        direct
+      is_map(normalized) ->
+        normalized
 
       rate_limits_map?(payload) ->
-        payload
+        normalize_rate_limit_snapshot(payload)
 
       true ->
+        [
+          Map.get(payload, "rate_limits"),
+          Map.get(payload, :rate_limits),
+          Map.get(payload, "rateLimits"),
+          Map.get(payload, :rateLimits),
+          Map.get(payload, "rate_limit"),
+          Map.get(payload, :rate_limit),
+          map_at_path(payload, ["params"]),
+          map_at_path(payload, [:params]),
+          map_at_path(payload, ["result"]),
+          map_at_path(payload, [:result]),
+          map_at_path(payload, ["params", "rateLimits"]),
+          map_at_path(payload, [:params, :rateLimits]),
+          map_at_path(payload, ["result", "rateLimits"]),
+          map_at_path(payload, [:result, :rateLimits])
+        ]
+        |> Enum.find_value(&rate_limits_from_payload/1) ||
         rate_limit_payloads(payload)
     end
   end
@@ -1759,6 +1776,117 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp rate_limits_from_payload(_payload), do: nil
+
+  defp normalize_rate_limits_payload(payload) when is_map(payload) do
+    cond do
+      docs_rate_limits_payload?(payload) ->
+        normalize_docs_rate_limits_payload(payload)
+
+      usage_summary_rate_limits_payload?(payload) ->
+        normalize_usage_summary_rate_limits_payload(payload)
+
+      true ->
+        nil
+    end
+  end
+
+  defp normalize_rate_limits_payload(_payload), do: nil
+
+  defp normalize_docs_rate_limits_payload(payload) when is_map(payload) do
+    primary_rate_limits =
+      Map.get(payload, "rateLimits") ||
+        Map.get(payload, :rateLimits)
+
+    buckets =
+      Map.get(payload, "rateLimitsByLimitId") ||
+        Map.get(payload, :rateLimitsByLimitId)
+
+    normalized_primary = normalize_rate_limit_snapshot(primary_rate_limits)
+    normalized_buckets = normalize_rate_limits_by_limit_id(buckets)
+
+    base =
+      normalized_primary ||
+        preferred_rate_limit_bucket(normalized_buckets)
+
+    if is_map(base) do
+      base
+      |> maybe_put(:rate_limits_by_limit_id, if(map_size(normalized_buckets) > 0, do: normalized_buckets, else: nil))
+    end
+  end
+
+  defp normalize_docs_rate_limits_payload(_payload), do: nil
+
+  defp normalize_usage_summary_rate_limits_payload(payload) when is_map(payload) do
+    primary_rate_limit =
+      payload
+      |> Map.get("rate_limit")
+      |> case do
+        nil -> Map.get(payload, :rate_limit)
+        value -> value
+      end
+
+    code_review_rate_limit =
+      payload
+      |> Map.get("code_review_rate_limit")
+      |> case do
+        nil -> Map.get(payload, :code_review_rate_limit)
+        value -> value
+      end
+
+    additional_rate_limits =
+      Map.get(payload, "additional_rate_limits") ||
+        Map.get(payload, :additional_rate_limits) ||
+        []
+
+    credits =
+      payload
+      |> Map.get("credits")
+      |> case do
+        nil -> Map.get(payload, :credits)
+        value -> value
+      end
+      |> normalize_credits()
+
+    plan_type =
+      payload
+      |> Map.get("plan_type")
+      |> case do
+        nil -> Map.get(payload, :plan_type)
+        value -> value
+      end
+      |> maybe_string()
+
+    primary_bucket =
+      normalize_usage_summary_rate_limit(primary_rate_limit,
+        limit_id: "codex",
+        limit_name: "Codex"
+      )
+
+    code_review_bucket =
+      normalize_usage_summary_rate_limit(code_review_rate_limit,
+        limit_id: "code_review",
+        limit_name: "Code Review"
+      )
+
+    buckets =
+      additional_rate_limits
+      |> normalize_usage_summary_additional_rate_limits()
+      |> maybe_put_bucket(primary_bucket)
+      |> maybe_put_bucket(code_review_bucket)
+
+    base =
+      primary_bucket ||
+        preferred_rate_limit_bucket(buckets)
+
+    if is_map(base) do
+      base
+      |> maybe_put(:credits, credits)
+      |> maybe_put(:plan_type, plan_type)
+      |> maybe_put(:rate_limits_by_limit_id, if(map_size(buckets) > 0, do: buckets, else: nil))
+    end
+  end
+
+  defp normalize_usage_summary_rate_limits_payload(_payload), do: nil
 
   defp rate_limit_payloads(payload) when is_map(payload) do
     Map.values(payload)
@@ -1792,8 +1920,12 @@ defmodule SymphonyElixir.Orchestrator do
     limit_id =
       Map.get(payload, "limit_id") ||
         Map.get(payload, :limit_id) ||
+        Map.get(payload, "limitId") ||
+        Map.get(payload, :limitId) ||
         Map.get(payload, "limit_name") ||
-        Map.get(payload, :limit_name)
+        Map.get(payload, :limit_name) ||
+        Map.get(payload, "limitName") ||
+        Map.get(payload, :limitName)
 
     has_buckets =
       Enum.any?(
@@ -1801,10 +1933,333 @@ defmodule SymphonyElixir.Orchestrator do
         &Map.has_key?(payload, &1)
       )
 
-    !is_nil(limit_id) and has_buckets
+    bucket_payloads = [
+      Map.get(payload, "primary"),
+      Map.get(payload, :primary),
+      Map.get(payload, "secondary"),
+      Map.get(payload, :secondary)
+    ]
+
+    has_windowed_buckets = Enum.any?(bucket_payloads, &rate_limit_bucket_payload?/1)
+
+    (has_buckets and has_windowed_buckets) || (!is_nil(limit_id) and has_buckets)
   end
 
   defp rate_limits_map?(_payload), do: false
+
+  defp normalize_rate_limits_by_limit_id(payload) when is_map(payload) do
+    Enum.reduce(payload, %{}, fn {key, value}, acc ->
+      case normalize_rate_limit_snapshot(value) do
+        %{} = normalized ->
+          bucket_key = maybe_string(Map.get(normalized, :limit_id)) || maybe_string(key)
+
+          if is_binary(bucket_key) do
+            Map.put(acc, bucket_key, normalized)
+          else
+            acc
+          end
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp normalize_rate_limits_by_limit_id(_payload), do: %{}
+
+  defp preferred_rate_limit_bucket(buckets) when is_map(buckets) do
+    Map.get(buckets, "codex") ||
+      Map.get(buckets, "code_review") ||
+      buckets
+      |> Map.values()
+      |> List.first()
+  end
+
+  defp preferred_rate_limit_bucket(_buckets), do: nil
+
+  defp normalize_usage_summary_additional_rate_limits(payload) when is_list(payload) do
+    Enum.reduce(payload, %{}, fn entry, acc ->
+      if is_map(entry) do
+        limit_name =
+          Map.get(entry, "limit_name") ||
+            Map.get(entry, :limit_name)
+
+        limit_id =
+          Map.get(entry, "metered_feature") ||
+            Map.get(entry, :metered_feature) ||
+            limit_name
+
+        rate_limit =
+          Map.get(entry, "rate_limit") ||
+            Map.get(entry, :rate_limit)
+
+        case normalize_usage_summary_rate_limit(rate_limit,
+               limit_id: limit_id,
+               limit_name: limit_name
+             ) do
+          %{} = normalized ->
+            maybe_put_bucket(acc, normalized)
+
+          _ ->
+            acc
+        end
+      else
+        acc
+      end
+    end)
+  end
+
+  defp normalize_usage_summary_additional_rate_limits(_payload), do: %{}
+
+  defp maybe_put_bucket(acc, %{} = bucket) when is_map(acc) do
+    bucket_key = maybe_string(Map.get(bucket, :limit_id)) || maybe_string(Map.get(bucket, :limit_name))
+
+    if is_binary(bucket_key), do: Map.put(acc, bucket_key, bucket), else: acc
+  end
+
+  defp maybe_put_bucket(acc, _bucket) when is_map(acc), do: acc
+
+  defp normalize_usage_summary_rate_limit(payload, opts) when is_map(payload) do
+    limit_id = maybe_string(Keyword.get(opts, :limit_id))
+    limit_name = maybe_string(Keyword.get(opts, :limit_name))
+    allowed = map_present_value(payload, ["allowed", :allowed])
+    limit_reached = map_present_value(payload, ["limit_reached", :limit_reached])
+
+    result =
+      %{}
+      |> maybe_put(:limit_id, limit_id)
+      |> maybe_put(:limit_name, limit_name)
+      |> maybe_put(:allowed, if(is_boolean(allowed), do: allowed, else: nil))
+      |> maybe_put(:limit_reached, if(is_boolean(limit_reached), do: limit_reached, else: nil))
+      |> maybe_put(:primary, normalize_rate_limit_bucket(Map.get(payload, "primary_window") || Map.get(payload, :primary_window)))
+      |> maybe_put(:secondary, normalize_rate_limit_bucket(Map.get(payload, "secondary_window") || Map.get(payload, :secondary_window)))
+
+    if map_size(result) > 0, do: result, else: nil
+  end
+
+  defp normalize_usage_summary_rate_limit(_payload, _opts), do: nil
+
+  defp normalize_rate_limit_snapshot(payload) when is_map(payload) do
+    result =
+      %{}
+      |> maybe_put(
+        :limit_id,
+        maybe_string(
+          Map.get(payload, "limit_id") ||
+            Map.get(payload, :limit_id) ||
+            Map.get(payload, "limitId") ||
+            Map.get(payload, :limitId)
+        )
+      )
+      |> maybe_put(
+        :limit_name,
+        maybe_string(
+          Map.get(payload, "limit_name") ||
+            Map.get(payload, :limit_name) ||
+            Map.get(payload, "limitName") ||
+            Map.get(payload, :limitName)
+        )
+      )
+      |> maybe_put(
+        :plan_type,
+        maybe_string(
+          Map.get(payload, "plan_type") ||
+            Map.get(payload, :plan_type) ||
+            Map.get(payload, "planType") ||
+            Map.get(payload, :planType)
+        )
+      )
+      |> maybe_put(:primary, normalize_rate_limit_bucket(Map.get(payload, "primary") || Map.get(payload, :primary)))
+      |> maybe_put(:secondary, normalize_rate_limit_bucket(Map.get(payload, "secondary") || Map.get(payload, :secondary)))
+      |> maybe_put(:credits, normalize_credits(Map.get(payload, "credits") || Map.get(payload, :credits)))
+
+    if map_size(result) > 0, do: result, else: nil
+  end
+
+  defp normalize_rate_limit_snapshot(_payload), do: nil
+
+  defp normalize_rate_limit_bucket(payload) when is_map(payload) do
+    used_percent =
+      number_like(
+        Map.get(payload, "used_percent") ||
+          Map.get(payload, :used_percent) ||
+          Map.get(payload, "usedPercent") ||
+          Map.get(payload, :usedPercent)
+      )
+
+    remaining_percent =
+      number_like(
+        Map.get(payload, "remaining_percent") ||
+          Map.get(payload, :remaining_percent) ||
+          Map.get(payload, "remainingPercent") ||
+          Map.get(payload, :remainingPercent)
+      ) ||
+        if(is_number(used_percent), do: max(0, 100 - used_percent), else: nil)
+
+    window_duration_mins =
+      integer_like(
+        Map.get(payload, "window_duration_mins") ||
+          Map.get(payload, :window_duration_mins) ||
+          Map.get(payload, "windowDurationMins") ||
+          Map.get(payload, :windowDurationMins)
+      )
+
+    limit_window_seconds =
+      integer_like(
+        Map.get(payload, "limit_window_seconds") ||
+          Map.get(payload, :limit_window_seconds)
+      ) ||
+        if(is_integer(window_duration_mins), do: window_duration_mins * 60, else: nil)
+
+    result =
+      %{}
+      |> maybe_put(:remaining, integer_like(Map.get(payload, "remaining") || Map.get(payload, :remaining)))
+      |> maybe_put(:limit, integer_like(Map.get(payload, "limit") || Map.get(payload, :limit)))
+      |> maybe_put(:used_percent, used_percent)
+      |> maybe_put(:remaining_percent, remaining_percent)
+      |> maybe_put(:window_duration_mins, window_duration_mins)
+      |> maybe_put(:limit_window_seconds, limit_window_seconds)
+      |> maybe_put(
+        :reset_in_seconds,
+        integer_like(
+          Map.get(payload, "reset_in_seconds") ||
+            Map.get(payload, :reset_in_seconds) ||
+            Map.get(payload, "reset_after_seconds") ||
+            Map.get(payload, :reset_after_seconds) ||
+            Map.get(payload, "resetInSeconds") ||
+            Map.get(payload, :resetInSeconds)
+        )
+      )
+      |> maybe_put(
+        :reset_at,
+        integer_like(
+          Map.get(payload, "reset_at") ||
+            Map.get(payload, :reset_at) ||
+            Map.get(payload, "resetAt") ||
+            Map.get(payload, :resetAt) ||
+            Map.get(payload, "resets_at") ||
+            Map.get(payload, :resets_at) ||
+            Map.get(payload, "resetsAt") ||
+            Map.get(payload, :resetsAt)
+        )
+      )
+
+    if map_size(result) > 0, do: result, else: nil
+  end
+
+  defp normalize_rate_limit_bucket(_payload), do: nil
+
+  defp normalize_credits(payload) when is_map(payload) do
+    result =
+      %{}
+      |> maybe_put(
+        :unlimited,
+        map_present_value(payload, ["unlimited", :unlimited])
+      )
+      |> maybe_put(
+        :has_credits,
+        map_present_value(payload, ["has_credits", :has_credits, "hasCredits", :hasCredits])
+      )
+      |> maybe_put(:balance, map_present_value(payload, ["balance", :balance]))
+
+    if map_size(result) > 0, do: result, else: nil
+  end
+
+  defp normalize_credits(_payload), do: nil
+
+  defp usage_summary_rate_limits_payload?(payload) when is_map(payload) do
+    has_any_key?(payload, [
+      "rate_limit",
+      :rate_limit,
+      "code_review_rate_limit",
+      :code_review_rate_limit,
+      "additional_rate_limits",
+      :additional_rate_limits
+    ])
+  end
+
+  defp usage_summary_rate_limits_payload?(_payload), do: false
+
+  defp docs_rate_limits_payload?(payload) when is_map(payload) do
+    has_any_key?(payload, [
+      "rateLimits",
+      :rateLimits,
+      "rateLimitsByLimitId",
+      :rateLimitsByLimitId
+    ])
+  end
+
+  defp docs_rate_limits_payload?(_payload), do: false
+
+  defp rate_limit_bucket_payload?(bucket) when is_map(bucket) do
+    has_any_key?(bucket, [
+      "remaining",
+      :remaining,
+      "limit",
+      :limit,
+      "reset_in_seconds",
+      :reset_in_seconds,
+      "reset_after_seconds",
+      :reset_after_seconds,
+      "resetAt",
+      :resetAt,
+      "resetsAt",
+      :resetsAt,
+      "used_percent",
+      :used_percent,
+      "usedPercent",
+      :usedPercent,
+      "windowDurationMins",
+      :windowDurationMins,
+      "limit_window_seconds",
+      :limit_window_seconds
+    ])
+  end
+
+  defp rate_limit_bucket_payload?(_bucket), do: false
+
+  defp has_any_key?(payload, keys) when is_map(payload) and is_list(keys) do
+    Enum.any?(keys, &Map.has_key?(payload, &1))
+  end
+
+  defp has_any_key?(_payload, _keys), do: false
+
+  defp map_present_value(payload, fields) when is_map(payload) and is_list(fields) do
+    Enum.reduce_while(fields, nil, fn field, _acc ->
+      if Map.has_key?(payload, field) do
+        {:halt, Map.get(payload, field)}
+      else
+        {:cont, nil}
+      end
+    end)
+  end
+
+  defp map_present_value(_payload, _fields), do: nil
+
+  defp maybe_put(map, key, value) when is_map(map) do
+    cond do
+      is_nil(value) ->
+        map
+
+      is_map(value) and map_size(value) == 0 ->
+        map
+
+      is_list(value) and value == [] ->
+        map
+
+      true ->
+        Map.put(map, key, value)
+    end
+  end
+
+  defp maybe_string(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp maybe_string(nil), do: nil
+  defp maybe_string(value) when is_atom(value), do: Atom.to_string(value)
+  defp maybe_string(_value), do: nil
 
   defp explicit_map_at_paths(payload, paths) when is_map(payload) and is_list(paths) do
     Enum.find_value(paths, fn path ->
@@ -2294,4 +2749,24 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp integer_like(_value), do: nil
+
+  defp number_like(value) when is_integer(value) and value >= 0, do: value
+  defp number_like(value) when is_float(value) and value >= 0, do: value
+
+  defp number_like(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    case Integer.parse(trimmed) do
+      {num, ""} when num >= 0 ->
+        num
+
+      _ ->
+        case Float.parse(trimmed) do
+          {num, ""} when num >= 0 -> num
+          _ -> nil
+        end
+    end
+  end
+
+  defp number_like(_value), do: nil
 end

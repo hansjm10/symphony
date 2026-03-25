@@ -924,7 +924,16 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_rate_limits(rate_limits) when is_map(rate_limits) do
     limit_id =
-      map_value(rate_limits, ["limit_id", :limit_id, "limit_name", :limit_name]) ||
+      map_value(rate_limits, [
+        "limit_id",
+        :limit_id,
+        "limitId",
+        :limitId,
+        "limit_name",
+        :limit_name,
+        "limitName",
+        :limitName
+      ]) ||
         "unknown"
 
     primary = format_rate_limit_bucket(map_value(rate_limits, ["primary", :primary]))
@@ -952,11 +961,19 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_rate_limit_bucket(bucket) when is_map(bucket) do
     remaining = map_value(bucket, ["remaining", :remaining])
     limit = map_value(bucket, ["limit", :limit])
+    used_percent =
+      parse_number(
+        map_value(bucket, ["used_percent", :used_percent, "usedPercent", :usedPercent])
+      )
+
+    window_mins = rate_limit_window_minutes(bucket)
 
     reset_value =
       map_value(bucket, [
         "reset_in_seconds",
         :reset_in_seconds,
+        "reset_after_seconds",
+        :reset_after_seconds,
         "resetInSeconds",
         :resetInSeconds,
         "reset_at",
@@ -980,6 +997,12 @@ defmodule SymphonyElixir.StatusDashboard do
         integer_like?(limit) ->
           "limit #{format_count(limit)}"
 
+        is_number(used_percent) and is_integer(window_mins) ->
+          "#{format_percent(used_percent)} used #{compact_duration_from_minutes(window_mins)}"
+
+        is_number(used_percent) ->
+          "#{format_percent(used_percent)} used"
+
         map_size(bucket) == 0 ->
           "n/a"
 
@@ -1000,14 +1023,16 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_rate_limit_credits(credits) when is_map(credits) do
     unlimited = map_value(credits, ["unlimited", :unlimited]) == true
-    has_credits = map_value(credits, ["has_credits", :has_credits]) == true
+    has_credits =
+      map_value(credits, ["has_credits", :has_credits, "hasCredits", :hasCredits]) == true
+
     balance = map_value(credits, ["balance", :balance])
 
     cond do
       unlimited ->
         "credits unlimited"
 
-      has_credits and is_number(balance) ->
+      has_credits and not is_nil(balance) ->
         "credits #{format_number(balance)}"
 
       has_credits ->
@@ -1019,6 +1044,11 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp format_rate_limit_credits(other), do: "credits #{to_string(other)}"
+
+  defp format_reset_value(value) when is_integer(value) and value >= 1_000_000_000 do
+    remaining = max(value - System.os_time(:second), 0)
+    "#{format_count(remaining)}s"
+  end
 
   defp format_reset_value(value) when is_integer(value), do: "#{format_count(value)}s"
   defp format_reset_value(value) when is_binary(value), do: value
@@ -1032,11 +1062,48 @@ defmodule SymphonyElixir.StatusDashboard do
     |> :erlang.float_to_binary(decimals: 2)
   end
 
+  defp format_number(value) when is_binary(value), do: value
   defp map_value(map, keys) when is_map(map) and is_list(keys) do
     Enum.find_value(keys, &Map.get(map, &1))
   end
 
   defp map_value(_map, _keys), do: nil
+
+  defp rate_limit_window_minutes(bucket) when is_map(bucket) do
+    parse_integer(
+      map_value(bucket, [
+        "window_duration_mins",
+        :window_duration_mins,
+        "windowDurationMins",
+        :windowDurationMins
+      ])
+    ) ||
+      case parse_integer(map_value(bucket, ["limit_window_seconds", :limit_window_seconds])) do
+        seconds when is_integer(seconds) -> div(seconds, 60)
+        _ -> nil
+      end
+  end
+
+  defp rate_limit_window_minutes(_bucket), do: nil
+
+  defp compact_duration_from_minutes(minutes) when is_integer(minutes) and minutes >= 1440 and rem(minutes, 1440) == 0 do
+    "#{div(minutes, 1440)}d"
+  end
+
+  defp compact_duration_from_minutes(minutes) when is_integer(minutes) and minutes >= 60 and rem(minutes, 60) == 0 do
+    "#{div(minutes, 60)}h"
+  end
+
+  defp compact_duration_from_minutes(minutes) when is_integer(minutes), do: "#{minutes}m"
+
+  defp format_percent(value) when is_integer(value), do: "#{value}%"
+
+  defp format_percent(value) when is_float(value) do
+    rounded = Float.round(value, 1)
+    if rounded == trunc(rounded), do: "#{trunc(rounded)}%", else: "#{rounded}%"
+  end
+
+  defp format_percent(_value), do: "n/a"
 
   defp integer_like?(value) when is_integer(value), do: true
   defp integer_like?(_value), do: false
@@ -1381,6 +1448,16 @@ defmodule SymphonyElixir.StatusDashboard do
     "rate limits updated: #{format_rate_limits_summary(rate_limits)}"
   end
 
+  defp humanize_codex_method("account/rateLimits/read", payload) do
+    rate_limits =
+      map_path(payload, ["result", "rateLimits"]) ||
+        map_path(payload, [:result, :rateLimits]) ||
+        map_path(payload, ["params", "rateLimits"]) ||
+        map_path(payload, [:params, :rateLimits])
+
+    "rate limits snapshot: #{format_rate_limits_summary(rate_limits)}"
+  end
+
   defp humanize_codex_method("account/chatgptAuthTokens/refresh", _payload), do: "account auth token refresh requested"
 
   defp humanize_codex_method("item/tool/call", payload) do
@@ -1656,15 +1733,17 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_rate_limits_summary(_rate_limits), do: "n/a"
 
   defp format_rate_limit_bucket_summary(bucket) when is_map(bucket) do
-    used_percent = map_value(bucket, ["usedPercent", :usedPercent])
-    window_mins = map_value(bucket, ["windowDurationMins", :windowDurationMins])
+    used_percent =
+      parse_number(map_value(bucket, ["used_percent", :used_percent, "usedPercent", :usedPercent]))
+
+    window_mins = rate_limit_window_minutes(bucket)
 
     cond do
       is_number(used_percent) and is_integer(window_mins) ->
-        "#{used_percent}% / #{window_mins}m"
+        "#{format_percent(used_percent)} / #{compact_duration_from_minutes(window_mins)}"
 
       is_number(used_percent) ->
-        "#{used_percent}% used"
+        "#{format_percent(used_percent)} used"
 
       true ->
         nil
@@ -1825,6 +1904,26 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp parse_integer(_value), do: nil
+
+  defp parse_number(value) when is_integer(value), do: value
+  defp parse_number(value) when is_float(value), do: value
+
+  defp parse_number(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    case Integer.parse(trimmed) do
+      {parsed, ""} ->
+        parsed
+
+      _ ->
+        case Float.parse(trimmed) do
+          {parsed, ""} -> parsed
+          _ -> nil
+        end
+    end
+  end
+
+  defp parse_number(_value), do: nil
 
   defp token_usage_paths do
     [

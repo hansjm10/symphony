@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   @initialize_id 1
   @thread_start_id 2
   @turn_start_id 3
+  @rate_limits_read_id 4
   @port_line_bytes 1_048_576
   @max_stream_log_bytes 1_000
   @non_interactive_tool_input_answer "This is a non-interactive session. Operator input is unavailable."
@@ -142,6 +143,28 @@ defmodule SymphonyElixir.Codex.AppServer do
         emit_message(on_message, :startup_failed, %{reason: reason}, metadata)
         {:error, reason}
     end
+  end
+
+  @spec emit_rate_limits_snapshot(session(), keyword()) :: :ok
+  def emit_rate_limits_snapshot(%{port: port}, opts \\ []) when is_list(opts) do
+    on_message = Keyword.get(opts, :on_message, &default_on_message/1)
+
+    case read_rate_limits(port) do
+      {:ok, result} ->
+        payload = %{"method" => "account/rateLimits/read", "result" => result}
+
+        emit_message(
+          on_message,
+          :notification,
+          %{payload: payload, raw: Jason.encode!(payload)},
+          metadata_from_message(port, payload)
+        )
+
+      {:error, reason} ->
+        Logger.debug("Skipping rate limit prefetch after app-server read error: #{inspect(reason)}")
+    end
+
+    :ok
   end
 
   @spec stop_session(session()) :: :ok
@@ -541,6 +564,15 @@ defmodule SymphonyElixir.Codex.AppServer do
       {:ok, %{"turn" => %{"id" => turn_id}}} -> {:ok, turn_id}
       other -> other
     end
+  end
+
+  defp read_rate_limits(port) do
+    send_message(port, %{
+      "method" => "account/rateLimits/read",
+      "id" => @rate_limits_read_id
+    })
+
+    await_response(port, @rate_limits_read_id)
   end
 
   defp await_turn_completion(port, on_message, tool_executor, auto_approve_requests) do

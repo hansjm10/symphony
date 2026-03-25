@@ -141,13 +141,16 @@ defmodule SymphonyElixir.AgentRunner do
          session_kind
        ) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns, session_kind)
+    on_message = codex_message_handler(codex_update_recipient, issue)
+
+    :ok = AppServer.emit_rate_limits_snapshot(app_session, on_message: on_message)
 
     with {:ok, turn_session} <-
            AppServer.run_turn(
              app_session,
              prompt,
              issue,
-             on_message: codex_message_handler(codex_update_recipient, issue)
+             on_message: on_message
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 

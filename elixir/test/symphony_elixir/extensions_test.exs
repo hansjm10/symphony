@@ -932,6 +932,76 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "No issues are currently backing off."
   end
 
+  test "dashboard liveview renders usage-window rate limits from codex snapshots" do
+    orchestrator_name = Module.concat(__MODULE__, :DashboardUsageWindowOrchestrator)
+    now_unix = DateTime.utc_now() |> DateTime.to_unix()
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: %{
+          running: [],
+          retrying: [],
+          codex_totals: nil,
+          rate_limits: %{
+            limit_id: "codex",
+            plan_type: "pro",
+            primary: %{
+              used_percent: 14,
+              window_duration_mins: 300,
+              reset_at: now_unix + 148
+            },
+            secondary: %{
+              used_percent: 7,
+              window_duration_mins: 10_080,
+              reset_at: now_unix + 6_232
+            },
+            credits: %{has_credits: false, unlimited: false, balance: "0"}
+          }
+        },
+        telemetry: %{
+          summary: %{
+            event_count: 1,
+            last_event_at: DateTime.utc_now(),
+            counts_by_kind: %{"dispatch" => 1},
+            counts_by_status: %{"started" => 1},
+            running_count: 0,
+            retrying_count: 0,
+            buffer_limit: 200
+          },
+          events: [
+            %{
+              id: 1,
+              at: DateTime.utc_now(),
+              issue_id: "issue-http",
+              issue_identifier: "MT-HTTP",
+              kind: "dispatch",
+              status: "started",
+              summary: "dispatch started on local worker",
+              metrics: %{"worker_host" => "local"}
+            }
+          ]
+        },
+        refresh: %{
+          queued: true,
+          coalesced: true,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll"]
+        }
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "5h window"
+    assert html =~ "14% used / 86% left"
+    assert html =~ "7d window"
+    assert html =~ "7% used / 93% left"
+    assert html =~ "Reset in"
+    assert html =~ "Credits"
+    assert html =~ "Empty"
+  end
+
   test "issue telemetry liveview renders issue-specific telemetry" do
     orchestrator_name = Module.concat(__MODULE__, :IssueTelemetryOrchestrator)
 

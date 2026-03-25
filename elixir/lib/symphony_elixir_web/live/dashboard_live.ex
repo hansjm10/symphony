@@ -838,39 +838,226 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp rate_limit_row(_label, nil), do: nil
 
   defp rate_limit_row(label, snapshot) when is_map(snapshot) do
-    remaining = map_value(snapshot, [:remaining, "remaining"])
-    limit = map_value(snapshot, [:limit, "limit"])
-    reset_seconds = map_value(snapshot, [:reset_in_seconds, "reset_in_seconds"])
-
     %{
-      label: label,
-      detail: "Reset in #{reset_seconds || "n/a"}s",
-      value: "#{format_int(remaining)} / #{format_int(limit)}"
+      label: rate_limit_label(label, snapshot),
+      detail: rate_limit_detail(snapshot),
+      value: rate_limit_value(snapshot)
     }
   end
 
   defp credits_row(nil), do: nil
 
-  defp credits_row(%{unlimited: true}) do
-    %{label: "Credits", detail: "Unlimited credits enabled.", value: "Open"}
-  end
+  defp credits_row(credits) when is_map(credits) do
+    unlimited = map_present_value(credits, [:unlimited, "unlimited"]) == true
+    has_credits = map_present_value(credits, [:has_credits, "has_credits", :hasCredits, "hasCredits"])
+    balance = map_value(credits, [:balance, "balance"])
 
-  defp credits_row(%{has_credits: true, balance: balance}) when is_number(balance) do
-    formatted_balance =
-      if is_float(balance), do: :erlang.float_to_binary(balance, decimals: 1), else: Integer.to_string(balance)
+    cond do
+      unlimited ->
+        %{label: "Credits", detail: "Unlimited credits enabled.", value: "Open"}
 
-    %{label: "Credits", detail: "Balance available.", value: formatted_balance}
-  end
+      has_credits == true and not is_nil(balance) ->
+        %{label: "Credits", detail: "Balance available.", value: format_balance(balance)}
 
-  defp credits_row(%{has_credits: false}) do
-    %{label: "Credits", detail: "No credits remaining.", value: "Empty"}
+      has_credits == true ->
+        %{label: "Credits", detail: "Balance available.", value: "Available"}
+
+      has_credits == false ->
+        %{label: "Credits", detail: "No credits remaining.", value: "Empty"}
+
+      true ->
+        %{label: "Credits", detail: "Credit status unavailable.", value: "n/a"}
+    end
   end
 
   defp credits_row(_credits), do: %{label: "Credits", detail: "Credit status unavailable.", value: "n/a"}
 
+  defp rate_limit_label(label, snapshot) do
+    rate_limit_window_label(snapshot) || label
+  end
+
+  defp rate_limit_value(snapshot) do
+    remaining = map_value(snapshot, [:remaining, "remaining"])
+    limit = map_value(snapshot, [:limit, "limit"])
+    used_percent = number_value(snapshot, [:used_percent, "used_percent", :usedPercent, "usedPercent"])
+    remaining_percent = rate_limit_remaining_percent(snapshot, used_percent)
+
+    cond do
+      is_integer(remaining) and is_integer(limit) ->
+        "#{format_int(remaining)} / #{format_int(limit)}"
+
+      is_number(used_percent) and is_number(remaining_percent) ->
+        "#{format_percent(used_percent)} used / #{format_percent(remaining_percent)} left"
+
+      is_number(used_percent) ->
+        "#{format_percent(used_percent)} used"
+
+      true ->
+        "n/a"
+    end
+  end
+
+  defp rate_limit_detail(snapshot) do
+    remaining_percent =
+      snapshot
+      |> number_value([:used_percent, "used_percent", :usedPercent, "usedPercent"])
+      |> then(&rate_limit_remaining_percent(snapshot, &1))
+
+    reset_seconds = rate_limit_reset_seconds(snapshot)
+
+    []
+    |> append_part(is_number(remaining_percent), "#{format_percent(remaining_percent)} left")
+    |> append_part(is_integer(reset_seconds), "Reset in #{format_int(reset_seconds)}s")
+    |> case do
+      [] -> "Upstream usage window available."
+      parts -> Enum.join(parts, " | ")
+    end
+  end
+
+  defp rate_limit_remaining_percent(snapshot, used_percent) when is_number(used_percent) do
+    number_value(snapshot, [:remaining_percent, "remaining_percent", :remainingPercent, "remainingPercent"]) ||
+      max(0, 100 - used_percent)
+  end
+
+  defp rate_limit_remaining_percent(_snapshot, _used_percent), do: nil
+
+  defp rate_limit_window_label(snapshot) do
+    minutes =
+      map_value(snapshot, [
+        :window_duration_mins,
+        "window_duration_mins",
+        :windowDurationMins,
+        "windowDurationMins"
+      ])
+
+    seconds =
+      map_value(snapshot, [
+        :limit_window_seconds,
+        "limit_window_seconds"
+      ])
+
+    cond do
+      is_integer(minutes) -> "#{compact_duration_from_minutes(minutes)} window"
+      is_integer(seconds) -> "#{compact_duration_from_seconds(seconds)} window"
+      true -> nil
+    end
+  end
+
+  defp rate_limit_reset_seconds(snapshot) do
+    direct =
+      map_value(snapshot, [
+        :reset_in_seconds,
+        "reset_in_seconds",
+        :reset_after_seconds,
+        "reset_after_seconds",
+        :resetInSeconds,
+        "resetInSeconds"
+      ])
+
+    reset_at =
+      map_value(snapshot, [
+        :reset_at,
+        "reset_at",
+        :resetAt,
+        "resetAt",
+        :resetsAt,
+        "resetsAt"
+      ])
+
+    cond do
+      is_integer(direct) -> max(direct, 0)
+      is_integer(reset_at) -> max(reset_at - DateTime.to_unix(DateTime.utc_now()), 0)
+      true -> nil
+    end
+  end
+
+  defp compact_duration_from_minutes(minutes) when is_integer(minutes) and minutes >= 1440 and rem(minutes, 1440) == 0 do
+    "#{div(minutes, 1440)}d"
+  end
+
+  defp compact_duration_from_minutes(minutes) when is_integer(minutes) and minutes >= 60 and rem(minutes, 60) == 0 do
+    "#{div(minutes, 60)}h"
+  end
+
+  defp compact_duration_from_minutes(minutes) when is_integer(minutes), do: "#{minutes}m"
+
+  defp compact_duration_from_seconds(seconds) when is_integer(seconds) and seconds >= 86_400 and rem(seconds, 86_400) == 0 do
+    "#{div(seconds, 86_400)}d"
+  end
+
+  defp compact_duration_from_seconds(seconds) when is_integer(seconds) and seconds >= 3_600 and rem(seconds, 3_600) == 0 do
+    "#{div(seconds, 3_600)}h"
+  end
+
+  defp compact_duration_from_seconds(seconds) when is_integer(seconds) and seconds >= 60 and rem(seconds, 60) == 0 do
+    "#{div(seconds, 60)}m"
+  end
+
+  defp compact_duration_from_seconds(seconds) when is_integer(seconds), do: "#{seconds}s"
+
+  defp format_percent(value) when is_integer(value), do: "#{value}%"
+
+  defp format_percent(value) when is_float(value) do
+    rounded = Float.round(value, 1)
+    if rounded == trunc(rounded), do: "#{trunc(rounded)}%", else: "#{rounded}%"
+  end
+
+  defp format_percent(_value), do: "n/a"
+
+  defp format_balance(value) when is_integer(value), do: format_int(value)
+
+  defp format_balance(value) when is_float(value) do
+    :erlang.float_to_binary(value, decimals: 1)
+  end
+
+  defp format_balance(value) when is_binary(value), do: value
+  defp format_balance(value), do: to_string(value)
+
+  defp number_value(map, keys) when is_map(map) and is_list(keys) do
+    Enum.find_value(keys, fn key ->
+      case Map.get(map, key) do
+        value when is_integer(value) -> value
+        value when is_float(value) -> value
+        value when is_binary(value) ->
+          trimmed = String.trim(value)
+
+          case Integer.parse(trimmed) do
+            {int, ""} -> int
+            _ ->
+              case Float.parse(trimmed) do
+                {float, ""} -> float
+                _ -> nil
+              end
+          end
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  defp number_value(_map, _keys), do: nil
+
+  defp append_part(parts, true, value), do: parts ++ [value]
+  defp append_part(parts, false, _value), do: parts
+
   defp map_value(map, keys) when is_map(map) and is_list(keys) do
     Enum.find_value(keys, &Map.get(map, &1))
   end
+
+  defp map_value(_map, _keys), do: nil
+
+  defp map_present_value(map, keys) when is_map(map) and is_list(keys) do
+    Enum.reduce_while(keys, nil, fn key, _acc ->
+      if Map.has_key?(map, key) do
+        {:halt, Map.get(map, key)}
+      else
+        {:cont, nil}
+      end
+    end)
+  end
+
+  defp map_present_value(_map, _keys), do: nil
 
   defp state_badge_class(state) do
     base = "state-badge"
